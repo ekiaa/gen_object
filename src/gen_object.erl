@@ -74,35 +74,10 @@ init(Parent, {Class, Params}) ->
 			erlang:error({error, {bad_return, {?MODULE, ?LINE, init, {{Class, init, [Params]}, Result}}}}, [Parent, {Class, Params}])
 	end.			
 
-handle_msg(Class, Message, #{inheritance := Inheritance} = Object) ->
-	case catch Class:handle_msg(Message, Object) of
-		appeal -> 
-			case maps:get(Class, Inheritance) of
-				?MODULE ->
-					{return, {error, not_matched}};
-				BaseClass when is_atom(BaseClass) ->
-					handle_msg(BaseClass, Message, Object);
-				Result ->
-					erlang:error({error, {not_matched, {?MODULE, ?LINE, handle_msg, {{maps, get, [Class, Inheritance]}, Result}}}})
-			end;
-		Result ->
-			Result
-	end.
-
 loop(#{class := Class} = Object, Parent, Deb) ->
 	receive
 		{call, Message, From, Id} ->
-			case handle_msg(Class, Message, Object) of
-				{return, Result} ->
-					From ! {Id, Result},
-					loop(Object, Parent, Deb);
-				{return, Result, NewObject} ->
-					From ! {Id, Result},
-					loop(NewObject, Parent, Deb);
-				Result ->
-					From ! {Id, {error, bad_return}},
-					erlang:error({error, {bad_return, {?MODULE, ?LINE, loop, {{Class, handle_msg, [Message, Object]}, Result}}}}, [Object, Parent, Deb])
-			end;
+			do_call(Message, From, Id, Object, Parent, Deb);
 		{cast, Message} ->
 			case handle_msg(Class, Message, Object) of
 				{return, _Result} ->
@@ -131,6 +106,43 @@ loop(#{class := Class} = Object, Parent, Deb) ->
 		%	?DEBUG("loop -> after 30000 ms process hibernated", []),
 			proc_lib:hibernate(?MODULE, loop, [Object, Parent, Deb])
 	end;
+
+do_call(Message, From, Id, Object, Parent, Deb);
+	case handle_msg(Class, Message, Object) of
+		{return, Result} ->
+			From ! {Id, Result},
+			loop(Object, Parent, Deb);
+		{return, Result, NewObject} ->
+			From ! {Id, Result},
+			loop(NewObject, Parent, Deb);
+		Result ->
+			From ! {Id, {error, bad_return}},
+			erlang:error({error, {bad_return, {?MODULE, ?LINE, loop, {{Class, handle_msg, [Message, Object]}, Result}}}}, [Object, Parent, Deb])
+	end.
+
+handle_msg(?MODULE, {Key, Value}, Object) when is_atom(Key); is_binary(Key) ->
+	{return, ok, maps:put(Key, Value, Object)};
+
+handle_msg(?MODULE, Key, Object) when is_atom(Key); is_binary(Key) ->
+	{return, maps:get(Key, Object, undefined)};
+
+handle_msg(?MODULE, Message, _Object) ->
+	{return, {error, {not_matched, Message}}};
+
+handle_msg(Class, Message, #{inheritance := Inheritance} = Object) ->
+	case catch Class:handle_msg(Message, Object) of
+		appeal -> 
+			case maps:get(Class, Inheritance) of
+				?MODULE ->
+					handle_msg(?MODULE, Message, Object);
+				BaseClass when is_atom(BaseClass) ->
+					handle_msg(BaseClass, Message, Object);
+				Result ->
+					erlang:error({error, {not_matched, {?MODULE, ?LINE, handle_msg, {{maps, get, [Class, Inheritance]}, Result}}}})
+			end;
+		Result ->
+			Result
+	end.
 
 loop(Object, Parent, Deb) ->
 	?DEBUG("loop -> not matchecd Object: ~p; Parent: ~p; Deb: ~p", [Object, Parent, Deb]),
