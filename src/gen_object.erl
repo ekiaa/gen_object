@@ -1,10 +1,10 @@
 -module(gen_object).
 
--export([new/2, start_link/2, call/2, call/3, cast/2, delete/1, inherit/1, inherit/3, init/2]).
+-export([new/2, start_link/2, call/2, call/3, cast/2, delete/1, inherit/1, inherit/3, init/2, loop/1, handle_msg/2]).
 
--export([system_continue/3, system_terminate/4, write_debug/3, system_get_state/1, system_replace_state/2, behaviour_info/1]).
+-export([system_continue/3, system_terminate/4, system_get_state/1, system_replace_state/2, behaviour_info/1]).
 
--export([write_debug/4, loop/3]).
+% -export([write_debug/4, loop/3]).
 
 -ifdef(debug).
 -define(DEBUG(Format, Params), io:format("DEBUG [~p:~p] " ++ Format ++ "~n", [?MODULE, ?LINE] ++ Params)).
@@ -36,8 +36,8 @@ call(Pid, Method, Timeout) when is_pid(Pid), is_integer(Timeout), Timeout > 0; T
 		Timeout -> {error, timeout}
 	end.
 
-cast(Pid, Method) when is_pid(Pid) ->
-	Pid ! {cast, Method},
+cast(Pid, Message) when is_pid(Pid) ->
+	Pid ! Message,
 	ok.
 
 delete(Pid) when is_pid(Pid) ->
@@ -69,104 +69,123 @@ init(Parent, {Class, Params}) ->
 	case catch Class:init(Params) of
 		{return, Object} ->
 			proc_lib:init_ack(Parent, {ok, self()}),
-			loop(Object#{class => Class}, Parent, Deb);
+			loop(#{
+				object => Object#{class => Class},
+				parent => Parent,
+				deb => Deb,
+				message => undefined,
+				stack => [],
+				result => undefined,
+				call_result => #{},
+				type => undefined,
+				from => undefined,
+				id => undefined
+			});
+			% loop(Object#{class => Class}, Parent, Deb);
 		Result ->
 			erlang:error({error, {bad_return, {?MODULE, ?LINE, init, {{Class, init, [Params]}, Result}}}}, [Parent, {Class, Params}])
 	end.			
 
-loop(#{class := Class} = Object, Parent, Deb) ->
+% loop(#{class := Class} = Object, Parent, Deb) ->
+loop(Params) ->
 	receive
 		{call, Message, From, Id} ->
-			do_call(Message, From, Id, Object, Parent, Deb);
-		{cast, Message} ->
-			case handle_msg(Class, Message, Object) of
-				{return, _Result} ->
-					loop(Object, Parent, Deb);
-				{return, _Result, NewObject} ->
-					loop(NewObject, Parent, Deb);
-				Result ->
-					erlang:error({error, {bad_return, {?MODULE, ?LINE, loop, {{Class, handle_msg, [Message, Object]}, Result}}}}, [Object, Parent, Deb])
-			end;
+			preprocessing(Params#{type => call, message => Message, from => From, id => Id});
 		{system, From, Request} = _Msg ->
-			?DEBUG("loop -> receive ~p", [_Msg]),
-			sys:handle_system_msg(Request, From, Parent, ?MODULE, Deb, Object);
+			% ?DEBUG("loop -> receive ~p", [_Msg]),
+			#{parent := Parent, deb := Deb} = Params,
+			sys:handle_system_msg(Request, From, Parent, ?MODULE, Deb, Params);
 		{delete, From} ->
-			?DEBUG("loop -> receive delete from ~p for Class: ~p", [From, Class]),
+			% ?DEBUG("loop -> receive delete from ~p for Class: ~p", [From, Class]),
+			#{object := #{class := Class} = Object} = Params,
 			case catch Class:terminate(Object, From) of
 				{'EXIT', ErrorMsg} ->
 					erlang:exit(ErrorMsg);
 				_ ->
 					erlang:exit(normal)
 			end;
-		_Message ->
-			?DEBUG("loop -> receive Message: ~p", [_Message]),
-			loop(Object, Parent, Deb)
+		Message ->
+			preprocessing(Params#{type := cast, message => Message})
 	after
 		30000 ->
 		%	?DEBUG("loop -> after 30000 ms process hibernated", []),
-			proc_lib:hibernate(?MODULE, loop, [Object, Parent, Deb])
-	end;
-
-do_call(Message, From, Id, Object, Parent, Deb);
-	case handle_msg(Class, Message, Object) of
-		{return, Result} ->
-			From ! {Id, Result},
-			loop(Object, Parent, Deb);
-		{return, Result, NewObject} ->
-			From ! {Id, Result},
-			loop(NewObject, Parent, Deb);
-		Result ->
-			From ! {Id, {error, bad_return}},
-			erlang:error({error, {bad_return, {?MODULE, ?LINE, loop, {{Class, handle_msg, [Message, Object]}, Result}}}}, [Object, Parent, Deb])
+			proc_lib:hibernate(?MODULE, loop, [Params])
 	end.
 
-handle_msg(?MODULE, {Key, Value}, Object) when is_atom(Key); is_binary(Key) ->
-	{return, ok, maps:put(Key, Value, Object)};
+preprocessing(#{message := [], stack := Stack} = Params) ->
+	reprocess(Params);
+preprocessing(#{message := [Message | Messages], stack := Stack} = Params) ->
+	preprocessing(Params#{message => Message, stack => [Messages | Stack]});
+preprocessing(#{message := #{} = Map} = Params) ->
+	preprocessing(Params#{message => maps:to_list(Map)});
+preprocessing(#{object := #{class := Class}} = Params) ->
+	processing(Params#{class => Class}).
 
-handle_msg(?MODULE, Key, Object) when is_atom(Key); is_binary(Key) ->
-	{return, maps:get(Key, Object, undefined)};
-
-handle_msg(?MODULE, Message, _Object) ->
-	{return, {error, {not_matched, Message}}};
-
-handle_msg(Class, Message, #{inheritance := Inheritance} = Object) ->
+processing(#{message := Message, class := Class, object := Object} = Params) ->
 	case catch Class:handle_msg(Message, Object) of
 		appeal -> 
-			case maps:get(Class, Inheritance) of
-				?MODULE ->
-					handle_msg(?MODULE, Message, Object);
-				BaseClass when is_atom(BaseClass) ->
-					handle_msg(BaseClass, Message, Object);
-				Result ->
-					erlang:error({error, {not_matched, {?MODULE, ?LINE, handle_msg, {{maps, get, [Class, Inheritance]}, Result}}}})
-			end;
+			#{inheritance := Inheritance} = Object,
+			BaseClass = maps:get(Class, Inheritance),
+			processing(Params#{class => BaseClass});
+		{return, Result} ->
+			postprocessing(Params#{result => Result});
+		{return, Result, NewObject} ->
+			postprocessing(Params#{result => Result, object => NewObject});
 		Result ->
-			Result
+			postprocessing(Params#{result => {error, {bad_return, {Class, Message, Result}}}})
 	end.
 
-loop(Object, Parent, Deb) ->
-	?DEBUG("loop -> not matchecd Object: ~p; Parent: ~p; Deb: ~p", [Object, Parent, Deb]),
-	erlang:error({error, {not_matched, {?MODULE, ?LINE, loop, [Object, Parent, Deb]}}}, [Object, Parent, Deb]).
+postprocessing(#{message := {Key, _}, result := Result, call_result := CallResult} = Params) when is_atom(Key) ->
+	reprocess(Params#{call_result => maps:put(Key, Result, CallResult)});
+postprocessing(#{message := Key, result := Result, call_result := CallResult} = Params) when is_atom(Key) ->
+	reprocess(Params#{call_result => maps:put(Key, Result, CallResult)});
+postprocessing(#{message := Message, result := Result, call_result := CallResult} = Params) ->
+	Key = erlang:phash2(Message),
+	reprocess(Params#{call_result => maps:put(Key, Result, CallResult)}).
 
-system_continue(Parent, Deb, Object) ->
-	?DEBUG("system_continue -> Parent: ~p; Deb: ~p; Object: ~p", [Parent, Deb, Object]),
-	loop(Object, Parent, Deb).
+reprocess(#{stack := []} = Params) ->
+	endprocess(Params);
+reprocess(#{stack := [Messages | Stack]} = Params) ->
+	preprocessing(Params#{stack => Stack, message => Messages}).
 
-system_terminate(Reason, _Parent, _Deb, _Object) ->
-	?DEBUG("system_terminate -> Reason: ~p; Parent: ~p; Deb: ~p; Object: ~p", [Reason, _Parent, _Deb, _Object]),
+endprocess(#{type := call, call_result := CallResult, from := From, id := Id} = Params) ->
+	Result = case maps:size(CallResult) of
+		1 -> [{_, Res}] = maps:to_list(CallResult), Res;
+		_ -> CallResult
+	end,
+	From ! {Id, Result},
+	loop(Params);
+endprocess(#{} = Params) ->
+	loop(Params).
+
+handle_msg({Key, Value}, Object) when is_atom(Key); is_binary(Key) ->
+	{return, ok, maps:put(Key, Value, Object)};
+
+handle_msg(Key, Object) when is_atom(Key); is_binary(Key) ->
+	{return, maps:get(Key, Object, undefined)};
+
+handle_msg(_Message, _Object) ->
+	{return, {error, not_matched}}.
+
+system_continue(_Parent, _Deb, Params) ->
+	% ?DEBUG("system_continue -> Parent: ~p; Deb: ~p; Object: ~p", [Parent, Deb, Object]),
+	loop(Params).
+
+system_terminate(Reason, _Parent, _Deb, _Params) ->
+	% ?DEBUG("system_terminate -> Reason: ~p; Parent: ~p; Deb: ~p; Object: ~p", [Reason, _Parent, _Deb, _Object]),
 	exit(Reason).
 
-system_get_state(Object) ->
-	?DEBUG("system_get_state -> Object: ~p", [Object]),
-	{ok, Object, Object}.
+system_get_state(Params) ->
+	% ?DEBUG("system_get_state -> Object: ~p", [Object]),
+	{ok, Params, Params}.
 
-system_replace_state(StateFun, Object) ->
-	?DEBUG("system_replace_state -> StateFun: ~p; Object: ~p", [StateFun, Object]),
-	NewState = StateFun(Object),
-	{ok, NewState, NewState}.
+system_replace_state(StateFun, Params) ->
+	% ?DEBUG("system_replace_state -> StateFun: ~p; Object: ~p", [StateFun, Object]),
+	NewParams = StateFun(Params),
+	{ok, NewParams, NewParams}.
 
-write_debug(Module, Line, Format, Params) ->
-	io:format("DEBUG [~p:~p] " ++ Format ++ "~n", [Module, Line] ++ Params).
+% write_debug(Module, Line, Format, Params) ->
+% 	io:format("DEBUG [~p:~p] " ++ Format ++ "~n", [Module, Line] ++ Params).
 
-write_debug(Dev, Event, Name) ->
-	io:format(Dev, "~p event = ~p~n", [Name, Event]).
+% write_debug(Dev, Event, Name) ->
+% 	io:format(Dev, "~p event = ~p~n", [Name, Event]).
