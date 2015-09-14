@@ -116,7 +116,7 @@ loop(Params) ->
 			proc_lib:hibernate(?MODULE, loop, [Params])
 	end.
 
-preprocessing(#{message := [], stack := Stack} = Params) ->
+preprocessing(#{message := [], stack := []} = Params) ->
 	reprocess(Params);
 preprocessing(#{message := [Message | Messages], stack := Stack} = Params) ->
 	preprocessing(Params#{message => Message, stack => [Messages | Stack]});
@@ -175,9 +175,11 @@ system_continue(_Parent, _Deb, Params) ->
 	% ?DEBUG("system_continue -> Parent: ~p; Deb: ~p; Object: ~p", [Parent, Deb, Object]),
 	loop(Params).
 
-system_terminate(Reason, _Parent, _Deb, _Params) ->
+system_terminate(Reason, _Parent, _Deb, Params) ->
 	% ?DEBUG("system_terminate -> Reason: ~p; Parent: ~p; Deb: ~p; Object: ~p", [Reason, _Parent, _Deb, _Object]),
-	exit(Reason).
+	% exit(Reason).
+	terminate(Reason, Params).
+
 
 system_get_state(Params) ->
 	% ?DEBUG("system_get_state -> Object: ~p", [Object]),
@@ -187,6 +189,23 @@ system_replace_state(StateFun, Params) ->
 	% ?DEBUG("system_replace_state -> StateFun: ~p; Object: ~p", [StateFun, Object]),
 	NewParams = StateFun(Params),
 	{ok, NewParams, NewParams}.
+
+terminate(Reason, #{object := #{class := Class} = Object}) ->
+	case catch Class:terminate(Reason, Object) of
+		{'EXIT', R} ->
+			exit(R);
+		_ ->
+		    case Reason of
+				normal ->
+					erlang:exit(normal);
+				shutdown ->
+					erlang:exit(shutdown);
+				{shutdown, _} = Shutdown ->
+					erlang:exit(Shutdown);
+				Reason ->
+					erlang:exit(Reason)
+			end
+	end.
 
 % write_debug(Module, Line, Format, Params) ->
 % 	io:format("DEBUG [~p:~p] " ++ Format ++ "~n", [Module, Line] ++ Params).
