@@ -99,15 +99,8 @@ loop(Params) ->
 			% ?DEBUG("loop -> receive ~p", [_Msg]),
 			#{parent := Parent, deb := Deb} = Params,
 			sys:handle_system_msg(Request, From, Parent, ?MODULE, Deb, Params);
-		{delete, From} ->
-			% ?DEBUG("loop -> receive delete from ~p for Class: ~p", [From, Class]),
-			#{object := #{class := Class} = Object} = Params,
-			case catch Class:terminate(Object, From) of
-				{'EXIT', ErrorMsg} ->
-					erlang:exit(ErrorMsg);
-				_ ->
-					erlang:exit(normal)
-			end;
+		{delete, _From} ->
+			terminate(normal, Params);
 		Message ->
 			preprocessing(Params#{type := cast, message => Message})
 	after
