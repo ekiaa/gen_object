@@ -12,6 +12,10 @@
 -define(DEBUG(Format, Params), ok).
 -endif.
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 % -callback constructor(Args :: term()) -> {'ok', Object :: map()}.
 % -callback method(Method :: atom() | {atom(), Args :: term()}, Object :: map()) -> {'return', NewObject :: map()}
 
@@ -90,7 +94,7 @@ init(Parent, {Class, Params}) ->
 loop(Params) ->
 	receive
 		{call, Message, From, Id} ->
-			preprocessing(Params#{type => call, message => Message, from => From, id => Id});
+			preprocessing(Params#{type => call, message => Message, from => From, id => Id, call_result => #{}});
 		{system, From, Request} = _Msg ->
 			% ?DEBUG("loop -> receive ~p", [_Msg]),
 			#{parent := Parent, deb := Deb} = Params,
@@ -189,3 +193,59 @@ system_replace_state(StateFun, Params) ->
 
 % write_debug(Dev, Event, Name) ->
 % 	io:format(Dev, "~p event = ~p~n", [Name, Event]).
+
+%===============================================================================
+
+-ifdef(TEST).
+
+gen_object_test_() ->
+	{foreach,
+		fun setup/0,
+		fun cleanup/1,
+		[
+			{"new; start_link",
+				fun() ->
+					?assertMatch(Obj when is_pid(Obj), gen_object:new(testobj, #{})),
+					?assertMatch({ok, Obj} when is_pid(Obj), gen_object:start_link(testobj, #{}))
+				end
+			},
+			{"call",
+				fun() ->
+					Obj = gen_object:new(testobj, #{b => 2}),
+					?assertMatch(undefined, gen_object:call(Obj, a)),
+					?assertMatch(2, gen_object:call(Obj, b)),
+					?assertMatch(ok, gen_object:call(Obj, {a, 1})),
+					?assertMatch(1, gen_object:call(Obj, a)),
+					?assertMatch(ok, gen_object:call(Obj, #{b => 3})),
+					?assertMatch(#{a := ok, b := ok}, gen_object:call(Obj, #{b => 4, a => 5})),
+					?assertMatch(#{a := 7, b := 6}, gen_object:call(Obj, [#{b => 6, a => 7}, a, b]))
+				end
+			},
+			{"cast",
+				fun() ->
+					Obj = gen_object:new(testobj, #{b => 2}),
+					?assertMatch(ok, gen_object:cast(Obj, a)),
+					?assertMatch(ok, gen_object:cast(Obj, [#{b => 3}, {a, 4}])),
+					?assertMatch(#{a := 4, b := 3}, gen_object:call(Obj, [a, b]))
+				end
+			},
+			{"Test#4",
+				fun() ->
+					Obj = gen_object:new(testobj, #{}),
+					Method = {sum, 1, 2},
+					Hash = erlang:phash2(Method),
+					?assertMatch(3, begin Res = gen_object:call(Obj, [{sum, 1, 2}, a]), maps:get(Hash, Res) end)
+				end
+			}
+		]
+	}.
+
+setup() ->
+	error_logger:tty(false),
+	application:start(gen_object).
+
+cleanup(_) ->
+	application:stop(gen_object),
+	error_logger:tty(true).
+
+-endif.
