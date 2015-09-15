@@ -112,7 +112,7 @@ loop(Params) ->
 preprocessing(#{message := [], stack := []} = Params) ->
 	reprocess(Params);
 preprocessing(#{message := [Message | Messages], stack := Stack} = Params) ->
-	preprocessing(Params#{message => Message, stack => [Messages | Stack]});
+	preprocessing(Params#{message => Message, stack => Messages ++ Stack});
 preprocessing(#{message := #{} = Map} = Params) ->
 	preprocessing(Params#{message => maps:to_list(Map)});
 preprocessing(#{object := #{class := Class}} = Params) ->
@@ -229,8 +229,10 @@ gen_object_test_() ->
 					?assertMatch(ok, gen_object:call(Obj, {a, 1})),
 					?assertMatch(1, gen_object:call(Obj, a)),
 					?assertMatch(ok, gen_object:call(Obj, #{b => 3})),
+					?assertMatch(ok, gen_object:call(Obj, [#{b => 3.5}])),
 					?assertMatch(#{a := ok, b := ok}, gen_object:call(Obj, #{b => 4, a => 5})),
-					?assertMatch(#{a := 7, b := 6}, gen_object:call(Obj, [#{b => 6, a => 7}, a, b]))
+					?assertMatch(#{a := 7, b := 6, c := ok}, gen_object:call(Obj, [#{b => 6, a => 7}, a, b, {c, 8}])),
+					?assertMatch(2, begin Res = gen_object:call(Obj, [#{x => 9}, y]), maps:size(Res) end)
 				end
 			},
 			{"cast",
