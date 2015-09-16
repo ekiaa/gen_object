@@ -250,6 +250,18 @@ gen_object_test_() ->
 					Hash = erlang:phash2(Method),
 					?assertMatch(3, begin Res = gen_object:call(Obj, [{sum, 1, 2}, a]), maps:get(Hash, Res) end)
 				end
+			},
+			{"abstract_factory",
+				fun() ->
+					Factory_1 = concrete_factory_1:create(),
+					?assertMatch(true, is_pid(Factory_1)),
+					Product_A1 = abstract_factory:create_product_A(Factory_1, null),
+					?assertMatch(true, is_pid(Product_A1)),
+					CounterValue1 = abstract_product:increment(Product_A1),
+					?assertMatch(2, CounterValue1),
+					CounterValue2 = abstract_product:decrement(Product_A1),
+					?assertMatch(1, CounterValue2)
+				end
 			}
 		]
 	}.
