@@ -1,4 +1,4 @@
--module(product_A1).
+-module(product_B1).
 
 -behaviour(gen_object).
 
@@ -10,12 +10,11 @@ create(Params) ->
 	gen_object:new(?MODULE, Params).
 
 init(Params) ->
-	Object = gen_object:inherit(?MODULE, abstract_product_A, Params),
+	Object = gen_object:inherit(?MODULE, abstract_product_B, Params),
 	{return, Object}.
 
-handle_msg(increment, #{counter := Counter} = Object) ->
-	Result = Counter + 2,
-	{return, Result, Object#{counter => Result}};
+handle_msg({multiply, Value}, #{multiplier := Multiplier}) ->
+	{return, Multiplier * Value + 1};
 
 handle_msg(_Message, _Object) ->
 	appeal.

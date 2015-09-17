@@ -1,4 +1,4 @@
--module(abstract_product).
+-module(abstract_product_A).
 
 -behaviour(gen_object).
 

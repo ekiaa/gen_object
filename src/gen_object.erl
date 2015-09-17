@@ -215,13 +215,13 @@ gen_object_test_() ->
 		fun setup/0,
 		fun cleanup/1,
 		[
-			{"new; start_link",
+			{"gen_object #1",
 				fun() ->
 					?assertMatch(Obj when is_pid(Obj), gen_object:new(testobj, #{})),
 					?assertMatch({ok, Obj} when is_pid(Obj), gen_object:start_link(testobj, #{}))
 				end
 			},
-			{"call",
+			{"gen_object #2",
 				fun() ->
 					Obj = gen_object:new(testobj, #{b => 2}),
 					?assertMatch(undefined, gen_object:call(Obj, a)),
@@ -235,7 +235,7 @@ gen_object_test_() ->
 					?assertMatch(2, begin Res = gen_object:call(Obj, [#{x => 9}, y]), maps:size(Res) end)
 				end
 			},
-			{"cast",
+			{"gen_object #3",
 				fun() ->
 					Obj = gen_object:new(testobj, #{b => 2}),
 					?assertMatch(ok, gen_object:cast(Obj, a)),
@@ -243,7 +243,7 @@ gen_object_test_() ->
 					?assertMatch(#{a := 4, b := 3}, gen_object:call(Obj, [a, b]))
 				end
 			},
-			{"Test#4",
+			{"gen_object #4",
 				fun() ->
 					Obj = gen_object:new(testobj, #{}),
 					Method = {sum, 1, 2},
@@ -255,12 +255,33 @@ gen_object_test_() ->
 				fun() ->
 					Factory_1 = concrete_factory_1:create(),
 					?assertMatch(true, is_pid(Factory_1)),
+					
 					Product_A1 = abstract_factory:create_product_A(Factory_1, null),
 					?assertMatch(true, is_pid(Product_A1)),
-					CounterValue1 = abstract_product:increment(Product_A1),
-					?assertMatch(2, CounterValue1),
-					CounterValue2 = abstract_product:decrement(Product_A1),
-					?assertMatch(1, CounterValue2)
+					ValueA1_1 = abstract_product_A:increment(Product_A1),
+					?assertMatch(2, ValueA1_1),
+					ValueA1_2 = abstract_product_A:decrement(Product_A1),
+					?assertMatch(1, ValueA1_2),
+
+					Product_B1 = abstract_factory:create_product_B(Factory_1, #{multiplier => 2}),
+					?assertMatch(true, is_pid(Product_B1)),
+					ValueB1 = abstract_product_B:multiply(Product_B1, 2),
+					?assertMatch(5, ValueB1),
+					
+					Factory_2 = concrete_factory_2:create(),
+					?assertMatch(true, is_pid(Factory_2)),
+					
+					Product_A2 = abstract_factory:create_product_A(Factory_2, null),
+					?assertMatch(true, is_pid(Product_A2)),
+					ValueA2_1 = abstract_product_A:increment(Product_A2),
+					?assertMatch(1, ValueA2_1),
+					ValueA2_2 = abstract_product_A:decrement(Product_A2),
+					?assertMatch(-1, ValueA2_2),
+
+					Product_B2 = abstract_factory:create_product_B(Factory_2, #{multiplier => 3}),
+					?assertMatch(true, is_pid(Product_B2)),
+					ValueB2 = abstract_product_B:multiply(Product_B2, 3),
+					?assertMatch(8, ValueB2)
 				end
 			}
 		]

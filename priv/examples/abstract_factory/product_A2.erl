@@ -1,4 +1,4 @@
--module(product_A1).
+-module(product_A2).
 
 -behaviour(gen_object).
 
@@ -13,8 +13,8 @@ init(Params) ->
 	Object = gen_object:inherit(?MODULE, abstract_product_A, Params),
 	{return, Object}.
 
-handle_msg(increment, #{counter := Counter} = Object) ->
-	Result = Counter + 2,
+handle_msg(decrement, #{counter := Counter} = Object) ->
+	Result = Counter - 2,
 	{return, Result, Object#{counter => Result}};
 
 handle_msg(_Message, _Object) ->
