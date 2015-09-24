@@ -4,20 +4,9 @@
 
 -export([system_continue/3, system_terminate/4, system_get_state/1, system_replace_state/2, behaviour_info/1]).
 
-% -export([write_debug/4, loop/3]).
-
--ifdef(debug).
--define(DEBUG(Format, Params), io:format("DEBUG [~p:~p] " ++ Format ++ "~n", [?MODULE, ?LINE] ++ Params)).
--else.
--define(DEBUG(Format, Params), ok).
--endif.
-
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
-
-% -callback constructor(Args :: term()) -> {'ok', Object :: map()}.
-% -callback method(Method :: atom() | {atom(), Args :: term()}, Object :: map()) -> {'return', NewObject :: map()}
 
 new(Class, Params) ->
 	case start_link(Class, Params) of
@@ -85,18 +74,15 @@ init(Parent, {Class, Params}) ->
 				from => undefined,
 				id => undefined
 			});
-			% loop(Object#{class => Class}, Parent, Deb);
 		Result ->
 			erlang:error({error, {bad_return, {?MODULE, ?LINE, init, {{Class, init, [Params]}, Result}}}}, [Parent, {Class, Params}])
 	end.			
 
-% loop(#{class := Class} = Object, Parent, Deb) ->
 loop(Params) ->
 	receive
 		{call, Message, From, Id} ->
 			preprocessing(Params#{type => call, message => Message, from => From, id => Id, call_result => #{}});
 		{system, From, Request} = _Msg ->
-			% ?DEBUG("loop -> receive ~p", [_Msg]),
 			#{parent := Parent, deb := Deb} = Params,
 			sys:handle_system_msg(Request, From, Parent, ?MODULE, Deb, Params);
 		{delete, _From} ->
@@ -105,7 +91,6 @@ loop(Params) ->
 			preprocessing(Params#{type := cast, message => Message})
 	after
 		30000 ->
-		%	?DEBUG("loop -> after 30000 ms process hibernated", []),
 			proc_lib:hibernate(?MODULE, loop, [Params])
 	end.
 
@@ -165,21 +150,16 @@ handle_msg(_Message, _Object) ->
 	{return, {error, not_matched}}.
 
 system_continue(_Parent, _Deb, Params) ->
-	% ?DEBUG("system_continue -> Parent: ~p; Deb: ~p; Object: ~p", [Parent, Deb, Object]),
 	loop(Params).
 
 system_terminate(Reason, _Parent, _Deb, Params) ->
-	% ?DEBUG("system_terminate -> Reason: ~p; Parent: ~p; Deb: ~p; Object: ~p", [Reason, _Parent, _Deb, _Object]),
-	% exit(Reason).
 	terminate(Reason, Params).
 
 
 system_get_state(Params) ->
-	% ?DEBUG("system_get_state -> Object: ~p", [Object]),
 	{ok, Params, Params}.
 
 system_replace_state(StateFun, Params) ->
-	% ?DEBUG("system_replace_state -> StateFun: ~p; Object: ~p", [StateFun, Object]),
 	NewParams = StateFun(Params),
 	{ok, NewParams, NewParams}.
 
@@ -199,12 +179,6 @@ terminate(Reason, #{object := #{class := Class} = Object}) ->
 					erlang:exit(Reason)
 			end
 	end.
-
-% write_debug(Module, Line, Format, Params) ->
-% 	io:format("DEBUG [~p:~p] " ++ Format ++ "~n", [Module, Line] ++ Params).
-
-% write_debug(Dev, Event, Name) ->
-% 	io:format(Dev, "~p event = ~p~n", [Name, Event]).
 
 %===============================================================================
 
