@@ -2,16 +2,21 @@
 
 -behaviour(gen_object).
 
--export([init/1, handle_msg/2, terminate/2]).
+-export([relationship/1, init/1, init/2, handle_msg/2, terminate/2]).
 
 -export([create/0]).
 
 create() ->
 	gen_object:new(?MODULE, null).
 
-init(Params) ->
-	Object = gen_object:inherit(?MODULE, abstract_factory, Params),
-	{return, Object}.
+relationship(_Params) ->
+	abstract_factory.
+
+init(_Params) ->
+	#{}.
+
+init(_Params, Object) ->
+	Object.
 
 handle_msg({create_product_A, Params}, #{count_A := Count_A} = Object) ->
 	Product_A = product_A1:create(Params),

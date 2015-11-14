@@ -2,7 +2,7 @@
 
 -behaviour(gen_object).
 
--export([init/1, handle_msg/2, terminate/2]).
+-export([relationship/1, init/1, init/2, handle_msg/2, terminate/2]).
 
 -export([create_product_A/2, create_product_B/2, created_A/1, created_B/1]).
 
@@ -18,12 +18,17 @@ created_A(Obj) ->
 created_B(Obj) ->
 	gen_object:call(Obj, created_B).
 
+relationship(_Params) ->
+	gen_object.
+
 init(_Params) ->
-	Object = gen_object:inherit(?MODULE),
-	{return, Object#{
+	#{
 		count_A => 0,
 		count_B => 0
-	}}.
+	}.
+
+init(_, Object) ->
+	Object.
 
 handle_msg(created_A, #{count_A := Count_A}) ->
 	{return, Count_A};
