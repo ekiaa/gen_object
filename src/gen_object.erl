@@ -121,10 +121,10 @@ preprocessing(ProcessState, State) ->
 
 processing(#{message := Message, class := Class} = ProcessState, #{object := Object} = State) ->
 	case catch Class:handle_msg(Message, Object) of
+		{'EXIT', {function_clause, _}} ->
+			processing_appeal(ProcessState, State);
 		appeal -> 
-			#{ancestors := Ancestors} = State,
-			Ancestor = maps:get(Class, Ancestors),
-			processing(ProcessState#{class => Ancestor}, State);
+			processing_appeal(ProcessState, State);
 		{return, Result} ->
 			postprocessing(ProcessState#{result => Result}, State);
 		{return, Result, NewObject} ->
@@ -132,6 +132,10 @@ processing(#{message := Message, class := Class} = ProcessState, #{object := Obj
 		Result ->
 			postprocessing(ProcessState#{result => {error, {bad_return, {Class, Message, Result}}}}, State)
 	end.
+
+processing_appeal(#{class := Class} = ProcessState, #{ancestors := Ancestors} = State) ->
+	Ancestor = maps:get(Class, Ancestors),
+	processing(ProcessState#{class => Ancestor}, State).
 
 postprocessing(#{message := {Key, _}, result := Result, call_result := CallResult} = ProcessState, State) when is_atom(Key) ->
 	reprocess(ProcessState#{call_result => maps:put(Key, Result, CallResult)}, State);
