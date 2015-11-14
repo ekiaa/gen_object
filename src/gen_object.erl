@@ -10,8 +10,7 @@
 
 behaviour_info(callbacks) ->
 	[
-		{relationship, 1},
-		{init, 1},
+		{inherit, 0},
 		{init, 2},
 		{handle_msg, 2},
 		{terminate, 2}
@@ -58,7 +57,7 @@ init_relationship(Params, #{class := Class} = State) ->
 	init_relationship(Class, Params, State).
 
 init_relationship(Successor, Params, #{ancestors := Ancestors, successors := Successors} = State) ->
-	case Successor:relationship(Params) of
+	case Successor:inherit() of
 		?MODULE ->
 			init_object(Params, State#{
 				ancestors => maps:put(Successor, ?MODULE, Ancestors),
@@ -70,27 +69,17 @@ init_relationship(Successor, Params, #{ancestors := Ancestors, successors := Suc
 	end.
 
 init_object(Params, #{successors := Successors} = State) ->
-	Class = maps:get(?MODULE, Successors),
-	init_ancestor(Class, Params, State#{}).
+	Successor = maps:get(?MODULE, Successors),
+	init_object(Successor, Params, State#{object => #{}}).
 
-init_ancestor(Ancestor, Params, #{parent := Parent, class := Class, successors := Successors} = State) ->
-	case Ancestor:init(Params) of
-		AncestorObject when Ancestor == Class ->
-			proc_lib:init_ack(Parent, {ok, self()}),
-			loop(State#{object => AncestorObject});
-		AncestorObject ->
-			Class = maps:get(Ancestor, Successors),
-			init_successor(Class, Params, State#{object => AncestorObject})
-	end.
-
-init_successor(Successor, Params, #{parent := Parent, class := Class, successors := Successors, object := AncestorObject} = State) ->
-	case Successor:init(Params, AncestorObject) of
-		SuccessorObject when Successor == Class ->
+init_object(Ancestor, Params, #{parent := Parent, class := Class, successors := Successors, object := AncestorObject} = State) ->
+	case Ancestor:init(Params, AncestorObject) of
+		SuccessorObject when Ancestor == Class ->
 			proc_lib:init_ack(Parent, {ok, self()}),
 			loop(State#{object => SuccessorObject});
 		SuccessorObject ->
-			Class = maps:get(Successor, Successors),
-			init_successor(Class, Params, State#{object => SuccessorObject})
+			Successor = maps:get(Ancestor, Successors),
+			init_object(Successor, Params, State#{object => SuccessorObject})
 	end.
 
 loop(#{class := Class} = State) ->

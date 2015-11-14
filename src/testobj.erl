@@ -2,16 +2,13 @@
 
 -behaviour(gen_object).
 
--export([relationship/1, init/1, init/2, handle_msg/2, terminate/2]).
+-export([inherit/0, init/2, handle_msg/2, terminate/2]).
 
-relationship(#{}) ->
+inherit() ->
 	gen_object.
 
-init(#{} = Params) ->
-	Params.
-
-init(_, Object) ->
-	Object.
+init(Params, Object) ->
+	maps:merge(Object, Params).
 
 handle_msg({sum, A, B}, _Object) when is_integer(A), is_integer(B) ->
 	{return, A+B};

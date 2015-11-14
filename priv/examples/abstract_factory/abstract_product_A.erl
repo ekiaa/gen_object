@@ -2,7 +2,7 @@
 
 -behaviour(gen_object).
 
--export([relationship/1, init/1, init/2, handle_msg/2, terminate/2]).
+-export([inherit/0, init/2, handle_msg/2, terminate/2]).
 
 -export([increment/1, decrement/1]).
 
@@ -12,16 +12,13 @@ increment(Obj) ->
 decrement(Obj) ->
 	gen_object:call(Obj, decrement).
 
-relationship(_Params) ->
+inherit() ->
 	gen_object.
 
-init(_Params) ->
+init(_Params, _Object) ->
 	#{
 		counter => 0
 	}.
-
-init(_, Object) ->
-	Object.
 
 handle_msg(increment, #{counter := Counter} = Object) ->
 	Result = Counter + 1,

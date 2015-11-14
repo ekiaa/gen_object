@@ -2,23 +2,20 @@
 
 -behaviour(gen_object).
 
--export([relationship/1, init/1, init/2, handle_msg/2, terminate/2]).
+-export([inherit/0, init/2, handle_msg/2, terminate/2]).
 
 -export([multiply/2]).
 
 multiply(Obj, Value) ->
 	gen_object:call(Obj, {multiply, Value}).
 
-relationship(_Params) ->
+inherit() ->
 	gen_object.
 
-init(#{multiplier := Multiplier}) when is_integer(Multiplier) ->
+init(#{multiplier := Multiplier}, _Object) when is_integer(Multiplier) ->
 	#{
 		multiplier => Multiplier
 	}.
-
-init(_Params, Object) ->
-	Object.
 
 handle_msg({multiply, Value}, #{multiplier := Multiplier}) ->
 	{return, Multiplier * Value};
