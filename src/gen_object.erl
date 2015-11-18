@@ -1,6 +1,6 @@
 -module(gen_object).
 
--export([new/2, start_link/2, call/2, call/3, cast/2, delete/1, init/2, loop/1, handle_msg/2]).
+-export([new/2, start_link/2, call/2, call/3, delete/1, init/2, loop/1, handle_msg/2]).
 
 -export([system_continue/3, system_terminate/4, system_get_state/1, system_replace_state/2, behaviour_info/1]).
 
@@ -25,27 +25,28 @@ new(Class, Params) ->
 start_link(Class, Params) ->
 	proc_lib:start_link(?MODULE, init, [Params, #{parent => self(), class => Class}]).
 
-call(Pid, Method) when is_pid(Pid) ->
-	call(Pid, Method, 5000).
+call(Pid, Message) ->
+	call(Pid, Message, 5000).
 
-call(Pid, Method, Timeout) when is_pid(Pid), is_integer(Timeout), Timeout > 0; Timeout == infinity ->
-	Id = erlang:make_ref(),
-	Pid ! {call, Method, self(), Id},
+call({async, Pid}, Message, _Timeout) when is_pid(Pid) ->
+	send(Pid, Message);
+
+call(Pid, Message, Timeout) when is_pid(Pid), is_integer(Timeout), Timeout > 0; Timeout == infinity ->
+	Ref = send(Pid, Message),
 	receive
-		{Id, Result} -> Result
+		{Ref, Result} -> Result
 	after
 		Timeout -> {error, timeout}
 	end.
 
-cast(Pid, Message) when is_pid(Pid) ->
-	Pid ! Message,
-	ok.
+send(Pid, Message) when is_pid(Pid) ->
+	Ref = erlang:make_ref(),
+	Pid ! {call, Message, self(), Ref},
+	Ref.
 
 delete(Pid) when is_pid(Pid) ->
 	Pid ! {delete, self()},
-	ok;
-delete(_) ->
-	{error, not_matched}.
+	ok.
 
 init(Params, State) ->
 	init_relationship(Params, State#{
@@ -102,7 +103,7 @@ loop(#{class := Class} = State) ->
 			preprocessing(
 				get_process_state(#{
 					class => Class, 
-					type => cast, 
+					type => info, 
 					message => Message}), 
 				State)
 	after
@@ -153,7 +154,7 @@ reprocess(#{stack := [Messages | Stack]} = ProcessState, State) ->
 endprocess(#{type := call, call_result := Result, from := From, id := Id}, State) ->
 	From ! {Id, Result},
 	loop(State);
-endprocess(#{type := cast}, State) ->
+endprocess(#{type := info}, State) ->
 	loop(State).
 
 handle_msg({Key, Value}, Object) when is_atom(Key); is_binary(Key) ->
@@ -239,8 +240,9 @@ gen_object_test_() ->
 			{"gen_object #3",
 				fun() ->
 					Obj = gen_object:new(testobj, #{b => 2}),
-					?assertMatch(ok, gen_object:cast(Obj, a)),
-					?assertMatch(ok, gen_object:cast(Obj, [#{b => 3}, {a, 4}])),
+					?assertMatch(Ref when is_reference(Ref), gen_object:call({async, Obj}, a)),
+					?assertMatch(Ref when is_reference(Ref), gen_object:call({async, Obj}, [#{b => 3}, {a, 4}], infinity)),
+					?assertMatch(#{a := 4}, begin Ref = gen_object:call({async, Obj}, a), receive {Ref, Res} -> Res end end),
 					?assertMatch(#{a := 4, b := 3}, gen_object:call(Obj, [a, b]))
 				end
 			},
