@@ -7,8 +7,7 @@
 -export([multiply/2]).
 
 multiply(Obj, Value) ->
-	#{multiply := Result} = gen_object:call(Obj, {multiply, Value}),
-	Result.
+	gen_object:call(Obj, {multiply, Value}).
 
 inherit() ->
 	gen_object.

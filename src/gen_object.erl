@@ -52,7 +52,8 @@ init(Params, State) ->
 	init_relationship(Params, State#{
 		deb => sys:debug_options([]), 
 		ancestors => #{}, 
-		successors => #{}}).
+		successors => #{},
+		stack => #{}}).
 
 init_relationship(Params, #{class := Class} = State) ->
 	init_relationship(Class, Params, State).
@@ -83,9 +84,12 @@ init_object(Ancestor, Params, #{parent := Parent, class := Class, successors := 
 			init_object(Successor, Params, State#{object => SuccessorObject})
 	end.
 
-loop(#{class := Class} = State) ->
+loop(State) ->
 	receive
+		{Ref, Result} when is_reference(Ref) ->
+			resumeprocess(Ref, Result, State);
 		{call, Message, From, Id} ->
+			#{class := Class} = State,
 			preprocessing(
 				get_process_state(#{
 					class => Class, 
@@ -100,6 +104,7 @@ loop(#{class := Class} = State) ->
 		{delete, _From} ->
 			terminate(normal, State);
 		Message ->
+			#{class := Class} = State,
 			preprocessing(
 				get_process_state(#{
 					class => Class, 
@@ -109,6 +114,29 @@ loop(#{class := Class} = State) ->
 	after
 		30000 ->
 			proc_lib:hibernate(?MODULE, loop, [State])
+	end.
+
+resumeprocess(Ref, Result, #{stack := Stack} = State) ->
+	case maps:get(Ref, Stack, undefined) of
+		undefined ->
+			loop(State);
+		#{callback := Callback, context := Context, state := ProcessState} ->
+			#{class := Class} = ProcessState,
+			#{object := Object} = State,
+			case Callback of
+				{Function, Key} when is_atom(Function), is_atom(Key) ->
+					case catch Class:Function(Key, Result, Context, Object) of
+						Res ->
+							resultprocessing(Res, ProcessState, State#{stack => maps:remove(Ref, Stack)})
+					end;
+				Function when is_atom(Function) ->
+					case catch Class:Function(Result, Context, Object) of
+						Res ->
+							resultprocessing(Res, ProcessState, State#{stack => maps:remove(Ref, Stack)})
+					end;
+				_ ->
+					exit({not_matched, ?LINE, Callback})
+			end
 	end.
 
 preprocessing(#{message := [], stack := []} = ProcessState, State) ->
@@ -122,16 +150,24 @@ preprocessing(ProcessState, State) ->
 
 processing(#{message := Message, class := Class} = ProcessState, #{object := Object} = State) ->
 	case catch Class:handle_msg(Message, Object) of
+		Res ->
+			resultprocessing(Res, ProcessState, State)
+	end.
+
+resultprocessing(Res, ProcessState, State) ->
+	case Res of
 		{'EXIT', {function_clause, _}} ->
 			processing_appeal(ProcessState, State);
 		appeal -> 
 			processing_appeal(ProcessState, State);
 		{return, Result} ->
 			postprocessing(ProcessState#{result => Result}, State);
-		{return, Result, NewObject} ->
-			postprocessing(ProcessState#{result => Result}, State#{object => NewObject});
-		Result ->
-			postprocessing(ProcessState#{result => {error, {bad_return, {Class, Message, Result}}}}, State)
+		{return, Result, Object} ->
+			postprocessing(ProcessState#{result => Result}, State#{object => Object});
+		{await, Ref, Callback, Context, Object} ->
+			suspendprocess(Ref, Callback, Context, ProcessState, State#{object => Object});
+		_ ->
+			exit({bad_return, ?LINE, Res})
 	end.
 
 processing_appeal(#{class := Class} = ProcessState, #{ancestors := Ancestors} = State) ->
@@ -152,10 +188,25 @@ reprocess(#{stack := [Messages | Stack]} = ProcessState, State) ->
 	preprocessing(ProcessState#{stack => Stack, message => Messages}, State).
 
 endprocess(#{type := call, call_result := Result, from := From, id := Id}, State) ->
-	From ! {Id, Result},
-	loop(State);
+	prepare_reply(From, Id, Result, State);
 endprocess(#{type := info}, State) ->
 	loop(State).
+
+prepare_reply(ReplyTo, Ref, Result, State) ->
+	case maps:size(Result) of
+		1 ->
+			[Value] = maps:values(Result),
+			reply(ReplyTo, Ref, Value, State);
+		_ ->
+			reply(ReplyTo, Ref, Result, State)
+	end.
+
+reply(ReplyTo, Ref, Result, State) ->
+	ReplyTo ! {Ref, Result},
+	loop(State).
+
+suspendprocess(Ref, Callback, Context, ProcessState, #{stack := Stack} = State) ->
+	loop(State#{stack => maps:put(Ref, #{callback => Callback, context => Context, state => ProcessState}, Stack)}).
 
 handle_msg({Key, Value}, Object) when is_atom(Key); is_binary(Key) ->
 	{return, ok, maps:put(Key, Value, Object)};
@@ -226,12 +277,12 @@ gen_object_test_() ->
 			{"gen_object #2",
 				fun() ->
 					Obj = gen_object:new(testobj, #{b => 2}),
-					?assertMatch(#{a := undefined}, gen_object:call(Obj, a)),
-					?assertMatch(#{b := 2},  gen_object:call(Obj, b)),
-					?assertMatch(#{a := ok}, gen_object:call(Obj, {a, 1})),
-					?assertMatch(#{a := 1},  gen_object:call(Obj, a)),
-					?assertMatch(#{b := ok}, gen_object:call(Obj, #{b => 3})),
-					?assertMatch(#{b := ok}, gen_object:call(Obj, [#{b => 3.5}])),
+					?assertMatch(undefined, gen_object:call(Obj, a)),
+					?assertMatch(2,  gen_object:call(Obj, b)),
+					?assertMatch(ok, gen_object:call(Obj, {a, 1})),
+					?assertMatch(1,  gen_object:call(Obj, a)),
+					?assertMatch(ok, gen_object:call(Obj, #{b => 3})),
+					?assertMatch(ok, gen_object:call(Obj, [#{b => 3.5}])),
 					?assertMatch(#{a := ok, b := ok}, gen_object:call(Obj, #{b => 4, a => 5})),
 					?assertMatch(#{a := 7, b := 6, c := ok}, gen_object:call(Obj, [#{b => 6, a => 7}, a, b, {c, 8}])),
 					?assertMatch(2, begin Res = gen_object:call(Obj, [#{x => 9}, y]), maps:size(Res) end)
@@ -242,7 +293,7 @@ gen_object_test_() ->
 					Obj = gen_object:new(testobj, #{b => 2}),
 					?assertMatch(Ref when is_reference(Ref), gen_object:call({async, Obj}, a)),
 					?assertMatch(Ref when is_reference(Ref), gen_object:call({async, Obj}, [#{b => 3}, {a, 4}], infinity)),
-					?assertMatch(#{a := 4}, begin Ref = gen_object:call({async, Obj}, a), receive {Ref, Res} -> Res end end),
+					?assertMatch(4, begin Ref = gen_object:call({async, Obj}, a), receive {Ref, Res} -> Res end end),
 					?assertMatch(#{a := 4, b := 3}, gen_object:call(Obj, [a, b]))
 				end
 			},
@@ -252,6 +303,16 @@ gen_object_test_() ->
 					Method = {sum, 1, 2},
 					Hash = erlang:phash2(Method),
 					?assertMatch(3, begin Res = gen_object:call(Obj, [{sum, 1, 2}, a]), maps:get(Hash, Res) end)
+				end
+			},
+			{"gen_object #5",
+				fun() ->
+					Obj1 = gen_object:new(testobj, #{key1 => 2}),
+					Obj2 = gen_object:new(testobj2, noparams),
+					gen_object:call(Obj2, {key2, 3}),
+					?assertMatch(ok, testobj:start(Obj1, Obj2)),
+					?assertMatch(32, gen_object:call(Obj1, res)),
+					?assertMatch(8, gen_object:call(Obj2, res))
 				end
 			},
 			{"abstract_factory",

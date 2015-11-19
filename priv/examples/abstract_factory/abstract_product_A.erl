@@ -7,12 +7,10 @@
 -export([increment/1, decrement/1]).
 
 increment(Obj) ->
-	#{increment := Result} = gen_object:call(Obj, increment),
-	Result.
+	gen_object:call(Obj, increment).
 
 decrement(Obj) ->
-	#{decrement := Result} = gen_object:call(Obj, decrement),
-	Result.
+	gen_object:call(Obj, decrement).
 
 inherit() ->
 	gen_object.

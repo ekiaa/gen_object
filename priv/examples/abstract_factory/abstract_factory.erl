@@ -7,20 +7,16 @@
 -export([create_product_A/2, create_product_B/2, created_A/1, created_B/1]).
 
 create_product_A(Obj, Params) ->
-	#{create_product_A := Result} = gen_object:call(Obj, {create_product_A, Params}),
-	Result.
+	gen_object:call(Obj, {create_product_A, Params}).
 
 create_product_B(Obj, Params) ->
-	#{create_product_B := Result} = gen_object:call(Obj, {create_product_B, Params}),
-	Result.
+	gen_object:call(Obj, {create_product_B, Params}).
 
 created_A(Obj) ->
-	#{created_A := Result} = gen_object:call(Obj, created_A),
-	Result.
+	gen_object:call(Obj, created_A).
 
 created_B(Obj) ->
-	#{created_B := Result} = gen_object:call(Obj, created_B),
-	Result.
+	gen_object:call(Obj, created_B).
 
 inherit() ->
 	gen_object.
