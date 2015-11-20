@@ -2,7 +2,7 @@
 
 -behaviour(gen_object).
 
--export([inherit/0, init/2, handle_msg/2, terminate/2]).
+-export([inherit/0, init/2, handle_call/2, handle_info/2, terminate/2]).
 
 -export([create_product_A/2, create_product_B/2, created_A/1, created_B/1]).
 
@@ -27,13 +27,16 @@ init(_Params, _Object) ->
 		count_B => 0
 	}.
 
-handle_msg(created_A, #{count_A := Count_A}) ->
-	{return, Count_A};
+handle_call(created_A, #{count_A := Count_A}) ->
+	{reply, Count_A};
 
-handle_msg(created_B, #{count_B := Count_B}) ->
-	{return, Count_B};
+handle_call(created_B, #{count_B := Count_B}) ->
+	{reply, Count_B};
 
-handle_msg(_Message, _Object) ->
+handle_call(_Message, _Object) ->
+	appeal.
+
+handle_info(_Info, _Object) ->
 	appeal.
 
 terminate(_Reason, _Object) ->

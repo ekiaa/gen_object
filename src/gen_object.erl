@@ -1,6 +1,8 @@
 -module(gen_object).
 
--export([new/2, start_link/2, call/2, call/3, delete/1, init/2, loop/1, handle_msg/2]).
+-export([new/2, start_link/2, call/2, call/3, delete/1, init/2, loop/1]).
+
+-export([handle_call/2, handle_info/2]).
 
 -export([system_continue/3, system_terminate/4, system_get_state/1, system_replace_state/2, behaviour_info/1]).
 
@@ -12,7 +14,8 @@ behaviour_info(callbacks) ->
 	[
 		{inherit, 0},
 		{init, 2},
-		{handle_msg, 2},
+		{handle_call, 2},
+		{handle_info, 2},
 		{terminate, 2}
 	].
 
@@ -88,7 +91,7 @@ loop(State) ->
 	receive
 		{Ref, Result} when is_reference(Ref) ->
 			resumeprocess(Ref, Result, State);
-		{call, Message, From, Id} ->
+		{call, Message, From, Ref} ->
 			#{class := Class} = State,
 			preprocessing(
 				get_process_state(#{
@@ -96,7 +99,7 @@ loop(State) ->
 					type => call, 
 					message => Message, 
 					from => From, 
-					id => Id}), 
+					ref => Ref}),
 				State);
 		{system, From, Request} = _Msg ->
 			#{parent := Parent, deb := Deb} = State,
@@ -107,9 +110,9 @@ loop(State) ->
 			#{class := Class} = State,
 			preprocessing(
 				get_process_state(#{
-					class => Class, 
-					type => info, 
-					message => Message}), 
+					class => Class,
+					type => info,
+					message => Message}),
 				State)
 	after
 		30000 ->
@@ -139,31 +142,38 @@ resumeprocess(Ref, Result, #{stack := Stack} = State) ->
 			end
 	end.
 
-preprocessing(#{message := [], stack := []} = ProcessState, State) ->
+preprocessing(#{type := call, message := [], stack := []} = ProcessState, State) ->
 	reprocess(ProcessState, State);
-preprocessing(#{message := [Message | Messages], stack := Stack} = ProcessState, State) ->
+preprocessing(#{type := call, message := [Message | Messages], stack := Stack} = ProcessState, State) ->
 	preprocessing(ProcessState#{message => Message, stack => Messages ++ Stack}, State);
-preprocessing(#{message := #{} = Map} = ProcessState, State) ->
+preprocessing(#{type := call, message := #{} = Map} = ProcessState, State) ->
 	preprocessing(ProcessState#{message => maps:to_list(Map)}, State);
 preprocessing(ProcessState, State) ->
 	processing(ProcessState, State).
 
-processing(#{message := Message, class := Class} = ProcessState, #{object := Object} = State) ->
-	case catch Class:handle_msg(Message, Object) of
-		Res ->
-			resultprocessing(Res, ProcessState, State)
+processing(#{type := call, message := Message, class := Class} = ProcessState, #{object := Object} = State) ->
+	case catch Class:handle_call(Message, Object) of
+		Res -> resultprocessing(Res, ProcessState, State)
+	end;
+processing(#{type := info, message := Message, class := Class} = ProcessState, #{object := Object} = State) ->
+	case catch Class:handle_info(Message, Object) of
+		Res -> resultprocessing(Res, ProcessState, State)
 	end.
 
-resultprocessing(Res, ProcessState, State) ->
+resultprocessing(Res, #{type := Type} = ProcessState, State) ->
 	case Res of
 		{'EXIT', {function_clause, _}} ->
 			processing_appeal(ProcessState, State);
 		appeal -> 
 			processing_appeal(ProcessState, State);
-		{return, Result} ->
+		{reply, Result} when Type == call ->
 			postprocessing(ProcessState#{result => Result}, State);
-		{return, Result, Object} ->
+		{reply, Result, Object} when Type == call ->
 			postprocessing(ProcessState#{result => Result}, State#{object => Object});
+		noreply when Type == info ->
+			endprocess(ProcessState, State);
+		{noreply, Object} when Type == info ->
+			endprocess(ProcessState, State#{object => Object});
 		{await, Ref, Callback, Context, Object} ->
 			suspendprocess(Ref, Callback, Context, ProcessState, State#{object => Object});
 		_ ->
@@ -187,8 +197,8 @@ reprocess(#{stack := []} = ProcessState, State) ->
 reprocess(#{stack := [Messages | Stack]} = ProcessState, State) ->
 	preprocessing(ProcessState#{stack => Stack, message => Messages}, State).
 
-endprocess(#{type := call, call_result := Result, from := From, id := Id}, State) ->
-	prepare_reply(From, Id, Result, State);
+endprocess(#{type := call, call_result := Result, from := From, ref := Ref}, State) ->
+	prepare_reply(From, Ref, Result, State);
 endprocess(#{type := info}, State) ->
 	loop(State).
 
@@ -208,14 +218,17 @@ reply(ReplyTo, Ref, Result, State) ->
 suspendprocess(Ref, Callback, Context, ProcessState, #{stack := Stack} = State) ->
 	loop(State#{stack => maps:put(Ref, #{callback => Callback, context => Context, state => ProcessState}, Stack)}).
 
-handle_msg({Key, Value}, Object) when is_atom(Key); is_binary(Key) ->
-	{return, ok, maps:put(Key, Value, Object)};
+handle_call({Key, Value}, Object) when is_atom(Key); is_binary(Key) ->
+	{reply, ok, maps:put(Key, Value, Object)};
 
-handle_msg(Key, Object) when is_atom(Key); is_binary(Key) ->
-	{return, maps:get(Key, Object, undefined)};
+handle_call(Key, Object) when is_atom(Key); is_binary(Key) ->
+	{reply, maps:get(Key, Object, undefined)};
 
-handle_msg(_Message, _Object) ->
-	{return, {error, not_matched}}.
+handle_call(_Message, _Object) ->
+	{reply, {error, not_matched}}.
+
+handle_info(_Message, _Object) ->
+	noreply.
 
 system_continue(_Parent, _Deb, State) ->
 	loop(State).
@@ -256,7 +269,7 @@ get_process_state(State) ->
 		call_result => #{},
 		type => undefined,
 		from => undefined,
-		id => undefined},
+		ref => undefined},
 	maps:merge(DefaultState, State).
 
 %===============================================================================
