@@ -1,12 +1,23 @@
 -module(gen_object).
 
--export([new/2, start_link/2, call/2, call/3, cast/2, delete/1, inherit/1, inherit/3, init/2, loop/1, handle_msg/2]).
+-export([new/2, start_link/2, call/2, call/3, delete/1, init/2, loop/1]).
+
+-export([handle_call/2, handle_info/2]).
 
 -export([system_continue/3, system_terminate/4, system_get_state/1, system_replace_state/2, behaviour_info/1]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
+
+behaviour_info(callbacks) ->
+	[
+		{inherit, 0},
+		{init, 2},
+		{handle_call, 2},
+		{handle_info, 2},
+		{terminate, 2}
+	].
 
 new(Class, Params) ->
 	case start_link(Class, Params) of
@@ -15,153 +26,223 @@ new(Class, Params) ->
 	end.
 
 start_link(Class, Params) ->
-	proc_lib:start_link(?MODULE, init, [self(), {Class, Params}]).
+	proc_lib:start_link(?MODULE, init, [Params, #{parent => self(), class => Class}]).
 
-call(Pid, Method) when is_pid(Pid) ->
-	call(Pid, Method, 5000).
+call(Pid, Message) ->
+	call(Pid, Message, 5000).
 
-call(Pid, Method, Timeout) when is_pid(Pid), is_integer(Timeout), Timeout > 0; Timeout == infinity ->
-	Id = erlang:make_ref(),
-	Pid ! {call, Method, self(), Id},
+call({async, Pid}, Message, _Timeout) when is_pid(Pid) ->
+	send(Pid, Message);
+
+call(Pid, Message, Timeout) when is_pid(Pid), is_integer(Timeout), Timeout > 0; Timeout == infinity ->
+	Ref = send(Pid, Message),
 	receive
-		{Id, Result} -> Result
+		{Ref, Result} -> Result
 	after
 		Timeout -> {error, timeout}
 	end.
 
-cast(Pid, Message) when is_pid(Pid) ->
-	Pid ! Message,
-	ok.
+send(Pid, Message) when is_pid(Pid) ->
+	Ref = erlang:make_ref(),
+	Pid ! {call, Message, self(), Ref},
+	Ref.
 
 delete(Pid) when is_pid(Pid) ->
 	Pid ! {delete, self()},
-	ok;
-delete(_) ->
-	{error, not_matched}.
+	ok.
 
-inherit(Class) ->
-	#{ref => erlang:make_ref(), inheritance => maps:put(Class, ?MODULE, #{})}.
+init(Params, State) ->
+	init_relationship(Params, State#{
+		deb => sys:debug_options([]), 
+		ancestors => #{}, 
+		successors => #{},
+		stack => #{}}).
 
-inherit(Class, BaseClass, Params) ->
-	case BaseClass:init(Params) of
-		{return, #{inheritance := Inheritance} = Object} ->
-			Object#{inheritance => maps:put(Class, BaseClass, Inheritance)};
-		Result ->
-			erlang:error({error, {bad_return, {?MODULE, ?LINE, inherit, {{BaseClass, init, [Params]}, Result}}}}, [Class, BaseClass, Params])
+init_relationship(Params, #{class := Class} = State) ->
+	init_relationship(Class, Params, State).
+
+init_relationship(Successor, Params, #{ancestors := Ancestors, successors := Successors} = State) ->
+	case Successor:inherit() of
+		?MODULE ->
+			init_object(Params, State#{
+				ancestors => maps:put(Successor, ?MODULE, Ancestors),
+				successors => maps:put(?MODULE, Successor, Successors)});
+		Ancestor when is_atom(Ancestor) ->
+			init_relationship(Ancestor, Params, State#{
+				ancestors => maps:put(Successor, Ancestor, Ancestors),
+				successors => maps:put(Ancestor, Successor, Successors)})
 	end.
 
-behaviour_info(callbacks) ->
-	[
-		{init, 1},
-		{handle_msg, 2},
-		{terminate, 2}
-	].
+init_object(Params, #{successors := Successors} = State) ->
+	Successor = maps:get(?MODULE, Successors),
+	init_object(Successor, Params, State#{object => #{}}).
 
-init(Parent, {Class, Params}) ->
-	Deb = sys:debug_options([]),
-	case catch Class:init(Params) of
-		{return, Object} ->
+init_object(Ancestor, Params, #{parent := Parent, class := Class, successors := Successors, object := AncestorObject} = State) ->
+	case Ancestor:init(Params, AncestorObject) of
+		SuccessorObject when Ancestor == Class ->
 			proc_lib:init_ack(Parent, {ok, self()}),
-			loop(#{
-				object => Object#{class => Class},
-				parent => Parent,
-				deb => Deb,
-				message => undefined,
-				stack => [],
-				result => undefined,
-				call_result => #{},
-				type => undefined,
-				from => undefined,
-				id => undefined
-			});
-		Result ->
-			erlang:error({error, {bad_return, {?MODULE, ?LINE, init, {{Class, init, [Params]}, Result}}}}, [Parent, {Class, Params}])
-	end.			
+			loop(State#{object => SuccessorObject});
+		SuccessorObject ->
+			Successor = maps:get(Ancestor, Successors),
+			init_object(Successor, Params, State#{object => SuccessorObject})
+	end.
 
-loop(Params) ->
+loop(State) ->
 	receive
-		{call, Message, From, Id} ->
-			preprocessing(Params#{type => call, message => Message, from => From, id => Id, call_result => #{}});
+		{Ref, Result} when is_reference(Ref) ->
+			resumeprocess(Ref, Result, State);
+		{call, Message, From, Ref} ->
+			#{class := Class} = State,
+			preprocessing(
+				get_process_state(#{
+					class => Class, 
+					type => call, 
+					message => Message, 
+					from => From, 
+					ref => Ref}),
+				State);
 		{system, From, Request} = _Msg ->
-			#{parent := Parent, deb := Deb} = Params,
-			sys:handle_system_msg(Request, From, Parent, ?MODULE, Deb, Params);
+			#{parent := Parent, deb := Deb} = State,
+			sys:handle_system_msg(Request, From, Parent, ?MODULE, Deb, State);
 		{delete, _From} ->
-			terminate(normal, Params);
+			terminate(normal, State);
 		Message ->
-			preprocessing(Params#{type := cast, message => Message})
+			#{class := Class} = State,
+			preprocessing(
+				get_process_state(#{
+					class => Class,
+					type => info,
+					message => Message}),
+				State)
 	after
 		30000 ->
-			proc_lib:hibernate(?MODULE, loop, [Params])
+			proc_lib:hibernate(?MODULE, loop, [State])
 	end.
 
-preprocessing(#{message := [], stack := []} = Params) ->
-	reprocess(Params);
-preprocessing(#{message := [Message | Messages], stack := Stack} = Params) ->
-	preprocessing(Params#{message => Message, stack => Messages ++ Stack});
-preprocessing(#{message := #{} = Map} = Params) ->
-	preprocessing(Params#{message => maps:to_list(Map)});
-preprocessing(#{object := #{class := Class}} = Params) ->
-	processing(Params#{class => Class}).
+resumeprocess(Ref, Result, #{stack := Stack} = State) ->
+	case maps:get(Ref, Stack, undefined) of
+		undefined ->
+			loop(State);
+		#{callback := Callback, context := Context, state := ProcessState} ->
+			#{class := Class} = ProcessState,
+			#{object := Object} = State,
+			case Callback of
+				{Function, Key} when is_atom(Function), is_atom(Key) ->
+					case catch Class:Function(Key, Result, Context, Object) of
+						Res ->
+							resultprocessing(Res, ProcessState, State#{stack => maps:remove(Ref, Stack)})
+					end;
+				Function when is_atom(Function) ->
+					case catch Class:Function(Result, Context, Object) of
+						Res ->
+							resultprocessing(Res, ProcessState, State#{stack => maps:remove(Ref, Stack)})
+					end;
+				_ ->
+					exit({not_matched, ?LINE, Callback})
+			end
+	end.
 
-processing(#{message := Message, class := Class, object := Object} = Params) ->
-	case catch Class:handle_msg(Message, Object) of
+preprocessing(#{type := call, message := [], stack := []} = ProcessState, State) ->
+	reprocess(ProcessState, State);
+preprocessing(#{type := call, message := [Message | Messages], stack := Stack} = ProcessState, State) ->
+	preprocessing(ProcessState#{message => Message, stack => Messages ++ Stack}, State);
+preprocessing(#{type := call, message := #{} = Map} = ProcessState, State) ->
+	preprocessing(ProcessState#{message => maps:to_list(Map)}, State);
+preprocessing(ProcessState, State) ->
+	processing(ProcessState, State).
+
+processing(#{type := call, message := Message, class := Class} = ProcessState, #{object := Object} = State) ->
+	case catch Class:handle_call(Message, Object) of
+		Res -> resultprocessing(Res, ProcessState, State)
+	end;
+processing(#{type := info, message := Message, class := Class} = ProcessState, #{object := Object} = State) ->
+	case catch Class:handle_info(Message, Object) of
+		Res -> resultprocessing(Res, ProcessState, State)
+	end.
+
+resultprocessing(Res, #{type := Type} = ProcessState, State) ->
+	case Res of
+		{'EXIT', {function_clause, _}} ->
+			processing_appeal(ProcessState, State);
 		appeal -> 
-			#{inheritance := Inheritance} = Object,
-			BaseClass = maps:get(Class, Inheritance),
-			processing(Params#{class => BaseClass});
-		{return, Result} ->
-			postprocessing(Params#{result => Result});
-		{return, Result, NewObject} ->
-			postprocessing(Params#{result => Result, object => NewObject});
-		Result ->
-			postprocessing(Params#{result => {error, {bad_return, {Class, Message, Result}}}})
+			processing_appeal(ProcessState, State);
+		{reply, Result} when Type == call ->
+			postprocessing(ProcessState#{result => Result}, State);
+		{reply, Result, Object} when Type == call ->
+			postprocessing(ProcessState#{result => Result}, State#{object => Object});
+		noreply when Type == info ->
+			endprocess(ProcessState, State);
+		{noreply, Object} when Type == info ->
+			endprocess(ProcessState, State#{object => Object});
+		{await, Ref, Callback, Context, Object} ->
+			suspendprocess(Ref, Callback, Context, ProcessState, State#{object => Object});
+		_ ->
+			exit({bad_return, ?LINE, Res})
 	end.
 
-postprocessing(#{message := {Key, _}, result := Result, call_result := CallResult} = Params) when is_atom(Key) ->
-	reprocess(Params#{call_result => maps:put(Key, Result, CallResult)});
-postprocessing(#{message := Key, result := Result, call_result := CallResult} = Params) when is_atom(Key) ->
-	reprocess(Params#{call_result => maps:put(Key, Result, CallResult)});
-postprocessing(#{message := Message, result := Result, call_result := CallResult} = Params) ->
+processing_appeal(#{class := Class} = ProcessState, #{ancestors := Ancestors} = State) ->
+	Ancestor = maps:get(Class, Ancestors),
+	processing(ProcessState#{class => Ancestor}, State).
+
+postprocessing(#{message := {Key, _}, result := Result, call_result := CallResult} = ProcessState, State) when is_atom(Key) ->
+	reprocess(ProcessState#{call_result => maps:put(Key, Result, CallResult)}, State);
+postprocessing(#{message := Key, result := Result, call_result := CallResult} = ProcessState, State) when is_atom(Key) ->
+	reprocess(ProcessState#{call_result => maps:put(Key, Result, CallResult)}, State);
+postprocessing(#{message := Message, result := Result, call_result := CallResult} = ProcessState, State) ->
 	Key = erlang:phash2(Message),
-	reprocess(Params#{call_result => maps:put(Key, Result, CallResult)}).
+	reprocess(ProcessState#{call_result => maps:put(Key, Result, CallResult)}, State).
 
-reprocess(#{stack := []} = Params) ->
-	endprocess(Params);
-reprocess(#{stack := [Messages | Stack]} = Params) ->
-	preprocessing(Params#{stack => Stack, message => Messages}).
+reprocess(#{stack := []} = ProcessState, State) ->
+	endprocess(ProcessState, State);
+reprocess(#{stack := [Messages | Stack]} = ProcessState, State) ->
+	preprocessing(ProcessState#{stack => Stack, message => Messages}, State).
 
-endprocess(#{type := call, call_result := CallResult, from := From, id := Id} = Params) ->
-	Result = case maps:size(CallResult) of
-		1 -> [{_, Res}] = maps:to_list(CallResult), Res;
-		_ -> CallResult
-	end,
-	From ! {Id, Result},
-	loop(Params);
-endprocess(#{} = Params) ->
-	loop(Params).
+endprocess(#{type := call, call_result := Result, from := From, ref := Ref}, State) ->
+	prepare_reply(From, Ref, Result, State);
+endprocess(#{type := info}, State) ->
+	loop(State).
 
-handle_msg({Key, Value}, Object) when is_atom(Key); is_binary(Key) ->
-	{return, ok, maps:put(Key, Value, Object)};
+prepare_reply(ReplyTo, Ref, Result, State) ->
+	case maps:size(Result) of
+		1 ->
+			[Value] = maps:values(Result),
+			reply(ReplyTo, Ref, Value, State);
+		_ ->
+			reply(ReplyTo, Ref, Result, State)
+	end.
 
-handle_msg(Key, Object) when is_atom(Key); is_binary(Key) ->
-	{return, maps:get(Key, Object, undefined)};
+reply(ReplyTo, Ref, Result, State) ->
+	ReplyTo ! {Ref, Result},
+	loop(State).
 
-handle_msg(_Message, _Object) ->
-	{return, {error, not_matched}}.
+suspendprocess(Ref, Callback, Context, ProcessState, #{stack := Stack} = State) ->
+	loop(State#{stack => maps:put(Ref, #{callback => Callback, context => Context, state => ProcessState}, Stack)}).
 
-system_continue(_Parent, _Deb, Params) ->
-	loop(Params).
+handle_call({Key, Value}, Object) when is_atom(Key); is_binary(Key) ->
+	{reply, ok, maps:put(Key, Value, Object)};
 
-system_terminate(Reason, _Parent, _Deb, Params) ->
-	terminate(Reason, Params).
+handle_call(Key, Object) when is_atom(Key); is_binary(Key) ->
+	{reply, maps:get(Key, Object, undefined)};
+
+handle_call(_Message, _Object) ->
+	{reply, {error, not_matched}}.
+
+handle_info(_Message, _Object) ->
+	noreply.
+
+system_continue(_Parent, _Deb, State) ->
+	loop(State).
+
+system_terminate(Reason, _Parent, _Deb, State) ->
+	terminate(Reason, State).
 
 
-system_get_state(Params) ->
-	{ok, Params, Params}.
+system_get_state(State) ->
+	{ok, State, State}.
 
-system_replace_state(StateFun, Params) ->
-	NewParams = StateFun(Params),
-	{ok, NewParams, NewParams}.
+system_replace_state(StateFun, State) ->
+	NewState = StateFun(State),
+	{ok, NewState, NewState}.
 
 terminate(Reason, #{object := #{class := Class} = Object}) ->
 	case catch Class:terminate(Reason, Object) of
@@ -179,6 +260,17 @@ terminate(Reason, #{object := #{class := Class} = Object}) ->
 					erlang:exit(Reason)
 			end
 	end.
+
+get_process_state(State) ->
+	DefaultState = #{
+		message => undefined,
+		stack => [],
+		result => undefined,
+		call_result => #{},
+		type => undefined,
+		from => undefined,
+		ref => undefined},
+	maps:merge(DefaultState, State).
 
 %===============================================================================
 
@@ -199,9 +291,9 @@ gen_object_test_() ->
 				fun() ->
 					Obj = gen_object:new(testobj, #{b => 2}),
 					?assertMatch(undefined, gen_object:call(Obj, a)),
-					?assertMatch(2, gen_object:call(Obj, b)),
+					?assertMatch(2,  gen_object:call(Obj, b)),
 					?assertMatch(ok, gen_object:call(Obj, {a, 1})),
-					?assertMatch(1, gen_object:call(Obj, a)),
+					?assertMatch(1,  gen_object:call(Obj, a)),
 					?assertMatch(ok, gen_object:call(Obj, #{b => 3})),
 					?assertMatch(ok, gen_object:call(Obj, [#{b => 3.5}])),
 					?assertMatch(#{a := ok, b := ok}, gen_object:call(Obj, #{b => 4, a => 5})),
@@ -212,8 +304,9 @@ gen_object_test_() ->
 			{"gen_object #3",
 				fun() ->
 					Obj = gen_object:new(testobj, #{b => 2}),
-					?assertMatch(ok, gen_object:cast(Obj, a)),
-					?assertMatch(ok, gen_object:cast(Obj, [#{b => 3}, {a, 4}])),
+					?assertMatch(Ref when is_reference(Ref), gen_object:call({async, Obj}, a)),
+					?assertMatch(Ref when is_reference(Ref), gen_object:call({async, Obj}, [#{b => 3}, {a, 4}], infinity)),
+					?assertMatch(4, begin Ref = gen_object:call({async, Obj}, a), receive {Ref, Res} -> Res end end),
 					?assertMatch(#{a := 4, b := 3}, gen_object:call(Obj, [a, b]))
 				end
 			},
@@ -223,6 +316,24 @@ gen_object_test_() ->
 					Method = {sum, 1, 2},
 					Hash = erlang:phash2(Method),
 					?assertMatch(3, begin Res = gen_object:call(Obj, [{sum, 1, 2}, a]), maps:get(Hash, Res) end)
+				end
+			},
+			{"gen_object #5",
+				fun() ->
+					Obj1 = gen_object:new(testobj, #{key1 => 2}),
+					Obj2 = gen_object:new(testobj2, noparams),
+					gen_object:call(Obj2, {key2, 3}),
+					?assertMatch(ok, testobj:start(Obj1, Obj2)),
+					?assertMatch(32, gen_object:call(Obj1, res)),
+					?assertMatch(8, gen_object:call(Obj2, res))
+				end
+			},
+			{"gen_object #6",
+				fun() ->
+					Obj = gen_object:new(testobj, #{info => info}),
+					Obj ! other_msg,
+					Obj ! message,
+					?assertMatch(message, gen_object:call(Obj, info))
 				end
 			},
 			{"abstract_factory",
