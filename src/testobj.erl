@@ -33,8 +33,11 @@ handle_call({step2, Key2}, #{key1 := Key1}) ->
 % handle_call(_Msg, _Object) ->
 % 	appeal.
 
-handle_info(_Info, _Object) ->
-	appeal.
+handle_info(message, Object) ->
+	{noreply, Object#{info => message}}.
+
+% handle_info(_Info, _Object) ->
+% 	appeal.
 
 terminate(_Reason, _Object) ->
 	ok.

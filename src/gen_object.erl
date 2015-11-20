@@ -328,6 +328,14 @@ gen_object_test_() ->
 					?assertMatch(8, gen_object:call(Obj2, res))
 				end
 			},
+			{"gen_object #6",
+				fun() ->
+					Obj = gen_object:new(testobj, #{info => info}),
+					Obj ! other_msg,
+					Obj ! message,
+					?assertMatch(message, gen_object:call(Obj, info))
+				end
+			},
 			{"abstract_factory",
 				fun() ->
 					Factory_1 = concrete_factory_1:create(),
