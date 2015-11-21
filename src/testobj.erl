@@ -21,6 +21,9 @@ init(Params, Object) ->
 handle_call({sum, A, B}, _Object) when is_integer(A), is_integer(B) ->
 	{reply, A+B};
 
+handle_call({add, {Key, Value}}, Object) ->
+	{reply, ok, maps:put(Key, Value, Object)};
+
 handle_call({start, Obj2}, Object) ->
 	io:format("[testobj:handle_call] start; Obj2: ~p~n", [Obj2]),
 	do_start(Obj2, Object);
@@ -28,7 +31,13 @@ handle_call({start, Obj2}, Object) ->
 handle_call({step2, Key2}, #{key1 := Key1}) ->
 	Res = Key1 * Key2,
 	io:format("[testobj:handle_call] step2; Key1: ~p; Key2: ~p; Res: ~p~n", [Key1, Key2, Res]),
-	{reply, Res}.
+	{reply, Res};
+
+handle_call(Key, Object) when is_atom(Key) ->
+	do_get_key_value(Key, Object);
+
+handle_call({Key, Value}, Object) when is_atom(Key) ->
+	do_set_key_value(Key, Value, Object).
 
 % handle_call(_Msg, _Object) ->
 % 	appeal.
@@ -52,3 +61,14 @@ do_step4(Sum, #{key4 := Key4}, Object) ->
 	Res = Sum * Key4,
 	io:format("[testobj:do_step4] Sum: ~p; Key4: ~p~n", [Sum, Key4]),
 	{reply, ok, Object#{res => Res}}.
+
+do_get_key_value(Key, Object) ->
+	{reply, maps:get(Key, Object, undefined)}.
+
+do_set_key_value(Key, Value, Object) ->
+	case maps:is_key(Key, Object) of
+		true ->
+			{reply, ok, maps:put(Key, Value, Object)};
+		false ->
+			{reply, undefined}
+	end.

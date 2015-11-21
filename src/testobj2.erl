@@ -15,6 +15,12 @@ inherit() ->
 init(_Params, Object) ->
 	Object#{sum => 0}.
 
+handle_call({key2, Value}, Object) ->
+	{reply, ok, Object#{key2 => Value}};
+
+handle_call(res, #{res := Value}) ->
+	{reply, Value};
+
 handle_call({step1, {Key1, From}}, #{key2 := Key2} = Object) ->
 	Ref = gen_object:call({async, From}, {step2, Key2}),
 	io:format("[testobj2:handle_call] step1; Key1: ~p; Key2: ~p; From: ~p; Ref: ~p~n", [Key1, Key2, From, Ref]),

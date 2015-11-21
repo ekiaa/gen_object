@@ -218,14 +218,8 @@ reply(ReplyTo, Ref, Result, State) ->
 suspendprocess(Ref, Callback, Context, ProcessState, #{stack := Stack} = State) ->
 	loop(State#{stack => maps:put(Ref, #{callback => Callback, context => Context, state => ProcessState}, Stack)}).
 
-handle_call({Key, Value}, Object) when is_atom(Key); is_binary(Key) ->
-	{reply, ok, maps:put(Key, Value, Object)};
-
-handle_call(Key, Object) when is_atom(Key); is_binary(Key) ->
-	{reply, maps:get(Key, Object, undefined)};
-
 handle_call(_Message, _Object) ->
-	{reply, {error, not_matched}}.
+	{reply, undefined}.
 
 handle_info(_Message, _Object) ->
 	noreply.
@@ -290,21 +284,22 @@ gen_object_test_() ->
 			{"gen_object #2",
 				fun() ->
 					Obj = gen_object:new(testobj, #{b => 2}),
-					?assertMatch(undefined, gen_object:call(Obj, a)),
 					?assertMatch(2,  gen_object:call(Obj, b)),
-					?assertMatch(ok, gen_object:call(Obj, {a, 1})),
-					?assertMatch(1,  gen_object:call(Obj, a)),
-					?assertMatch(ok, gen_object:call(Obj, #{b => 3})),
-					?assertMatch(ok, gen_object:call(Obj, [#{b => 3.5}])),
+					?assertMatch(undefined, gen_object:call(Obj, a)),
+					?assertMatch(ok,  gen_object:call(Obj, {add, {a, 1}})),
+					?assertMatch(1, gen_object:call(Obj, a)),
+					?assertMatch(ok, gen_object:call(Obj, {a, 2})),
+					?assertMatch(#{a := 2, b := 2}, gen_object:call(Obj, [a, b])),
+					?assertMatch(#{a := ok, b := ok}, gen_object:call(Obj, [{a, 3}, #{b => 4}])),
+					?assertMatch(#{a := 3, b := 4}, gen_object:call(Obj, [a, b])),
 					?assertMatch(#{a := ok, b := ok}, gen_object:call(Obj, #{b => 4, a => 5})),
-					?assertMatch(#{a := 7, b := 6, c := ok}, gen_object:call(Obj, [#{b => 6, a => 7}, a, b, {c, 8}])),
-					?assertMatch(2, begin Res = gen_object:call(Obj, [#{x => 9}, y]), maps:size(Res) end)
+					?assertMatch(2, begin Res = gen_object:call(Obj, [#{a => 9}, b]), maps:size(Res) end)
 				end
 			},
 			{"gen_object #3",
 				fun() ->
 					Obj = gen_object:new(testobj, #{b => 2}),
-					?assertMatch(Ref when is_reference(Ref), gen_object:call({async, Obj}, a)),
+					?assertMatch(Ref when is_reference(Ref), gen_object:call({async, Obj}, {add, {a, 1}})),
 					?assertMatch(Ref when is_reference(Ref), gen_object:call({async, Obj}, [#{b => 3}, {a, 4}], infinity)),
 					?assertMatch(4, begin Ref = gen_object:call({async, Obj}, a), receive {Ref, Res} -> Res end end),
 					?assertMatch(#{a := 4, b := 3}, gen_object:call(Obj, [a, b]))
