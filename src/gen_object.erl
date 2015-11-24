@@ -199,6 +199,8 @@ resultprocessing(Res, #{type := Type} = ProcessState, State) ->
 			endprocess(ProcessState, State#{object => Object});
 		{await, Ref, Callback, Context, Object} ->
 			suspendprocess(Ref, Callback, Context, ProcessState, State#{object => Object});
+		{self, Call, Callback, Context, Object} ->
+			recurprocess(Call, Callback, Context, ProcessState, State#{object => Object});
 		_ ->
 			exit({bad_return, ?LINE, Res})
 	end.
@@ -233,12 +235,25 @@ prepare_reply(ReplyTo, Ref, Result, State) when is_map(Result) ->
 prepare_reply(ReplyTo, Ref, Result, State) ->
 	reply(ReplyTo, Ref, Result, State).
 
+reply(self, Ref, Result, State) ->
+	resumeprocess(Ref, Result, State);
 reply(ReplyTo, Ref, Result, State) ->
 	ReplyTo ! {Ref, Result},
 	loop(State).
 
 suspendprocess(Ref, Callback, Context, ProcessState, #{stack := Stack} = State) ->
 	loop(State#{stack => maps:put(Ref, #{callback => Callback, context => Context, state => ProcessState}, Stack)}).
+
+recurprocess(Call, Callback, Context, #{class := Class} = ProcessState, #{stack := Stack} = State) ->
+	Ref = erlang:make_ref(),
+	preprocessing(
+		get_process_state(#{
+			class => Class, 
+			type => call, 
+			message => Call,
+			from => self, 
+			ref => Ref}),
+		State#{stack => maps:put(Ref, #{callback => Callback, context => Context, state => ProcessState}, Stack)}).
 
 handle_call(_Message, _Object) ->
 	{reply, undefined}.
@@ -348,6 +363,16 @@ gen_object_test_() ->
 					?assertMatch(ok, testobj:start(Obj1, Obj2)),
 					?assertMatch(32, gen_object:call(Obj1, res)),
 					?assertMatch(8, gen_object:call(Obj2, res))
+				end
+			},
+			{"gen_object: self",
+				fun() ->
+					Obj = gen_object:new(testobj3, #{}),
+					?assertMatch("Params: par1 = no_value; par2 = no_value.", gen_object:call(Obj, get_params_listing)),
+					?assertMatch(ok, gen_object:call(Obj, {par1, val1})),
+					?assertMatch("Params: par1 = val1; par2 = no_value.", gen_object:call(Obj, get_params_listing)),
+					?assertMatch(ok, gen_object:call(Obj, {par2, val2})),
+					?assertMatch("Params: par1 = val1; par2 = val2.", gen_object:call(Obj, get_params_listing))
 				end
 			},
 			{"gen_object: info",
