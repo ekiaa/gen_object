@@ -163,6 +163,8 @@ resumeprocess(Ref, Result, #{stack := Stack} = State) ->
 			end
 	end.
 
+preprocessing(#{type := func} = ProcessState, State) ->
+	processing(ProcessState, State);
 preprocessing(#{type := mcall, message_list := []} = ProcessState, State) ->
 	endprocess(ProcessState, State);
 preprocessing(#{type := mcall, message_list := [Message | MessageList]} = ProcessState, State) ->
@@ -177,6 +179,14 @@ processing(#{type := Type, message := Message, class := Class} = ProcessState, #
 processing(#{type := info, message := Message, class := Class} = ProcessState, #{object := Object} = State) ->
 	case catch Class:handle_info(Message, Object) of
 		Res -> resultprocessing(Res, ProcessState, State)
+	end;
+processing(#{type := func, mfa := {Module, Function, Argument}} = ProcessState, #{object := Object} = State) ->
+	case catch Module:Function(Argument, Object) of
+		Res -> resultprocessing(Res, ProcessState, State)
+	end;
+processing(#{type := func, mfa := {Function, Argument}, class := Class} = ProcessState, #{object := Object} = State) ->
+	case catch Class:Function(Argument, Object) of
+		Res -> resultprocessing(Res, ProcessState, State)
 	end.
 
 resultprocessing(Res, #{type := Type} = ProcessState, State) ->
@@ -185,13 +195,15 @@ resultprocessing(Res, #{type := Type} = ProcessState, State) ->
 			processing_appeal(ProcessState, State);
 		appeal -> 
 			processing_appeal(ProcessState, State);
+		{appeal, Object} -> 
+			processing_appeal(ProcessState, State#{object => Object});
 		{reply, Result} when Type == mcall ->
 			postprocessing(Result, ProcessState, State);
-		{reply, Result} when Type == call ->
+		{reply, Result} when Type == call; Type == func ->
 			endprocess(ProcessState#{result => Result}, State);
 		{reply, Result, Object} when Type == mcall ->
 			postprocessing(Result, ProcessState, State#{object => Object});
-		{reply, Result, Object} when Type == call ->
+		{reply, Result, Object} when Type == call; Type == func ->
 			endprocess(ProcessState#{result => Result}, State#{object => Object});
 		noreply when Type == info ->
 			endprocess(ProcessState, State);
@@ -201,6 +213,10 @@ resultprocessing(Res, #{type := Type} = ProcessState, State) ->
 			suspendprocess(Ref, Callback, Context, ProcessState, State);
 		{await, Ref, Callback, Context, Object} ->
 			suspendprocess(Ref, Callback, Context, ProcessState, State#{object => Object});
+		{func, MFA, Callback, Context} ->
+			recurprocess(func, MFA, Callback, Context, ProcessState, State);
+		{func, MFA, Callback, Context, Object} ->
+			recurprocess(func, MFA, Callback, Context, ProcessState, State#{object => Object});
 		{call, Message, Callback, Context} ->
 			recurprocess(call, Message, Callback, Context, ProcessState, State);
 		{call, Message, Callback, Context, Object} ->
@@ -225,12 +241,10 @@ postprocessing(Result, #{message := Message, result := CallResult} = ProcessStat
 	Key = erlang:phash2(Message),
 	preprocessing(ProcessState#{result => maps:put(Key, Result, CallResult)}, State).
 
-endprocess(#{type := call, result := Result, from := From, ref := Ref}, State) ->
-	prepare_reply(From, Ref, Result, State);
-endprocess(#{type := mcall, result := Result, from := From, ref := Ref}, State) ->
-	prepare_reply(From, Ref, Result, State);
 endprocess(#{type := info}, State) ->
-	loop(State).
+	loop(State);
+endprocess(#{from := From, ref := Ref, result := Result}, State) ->
+	prepare_reply(From, Ref, Result, State).
 
 prepare_reply(ReplyTo, Ref, Result, State) when is_map(Result) ->
 	case maps:size(Result) of
@@ -251,6 +265,17 @@ reply(ReplyTo, Ref, Result, State) ->
 
 suspendprocess(Ref, Callback, Context, ProcessState, #{stack := Stack} = State) ->
 	loop(State#{stack => maps:put(Ref, #{callback => Callback, context => Context, state => ProcessState}, Stack)}).
+
+recurprocess(func, MFA, Callback, Context, #{class := Class} = ProcessState, #{stack := Stack} = State) ->
+	Ref = erlang:make_ref(),
+	preprocessing(
+		get_process_state(#{ 
+			class => Class, 
+			type => func, 
+			mfa => MFA,
+			from => self, 
+			ref => Ref}),
+		State#{stack => maps:put(Ref, #{callback => Callback, context => Context, state => ProcessState}, Stack)});
 
 recurprocess(call, Message, Callback, Context, #{class := Class} = ProcessState, #{stack := Stack} = State) ->
 	Ref = erlang:make_ref(),
@@ -401,6 +426,12 @@ gen_object_test_() ->
 					Obj ! other_msg,
 					Obj ! message,
 					?assertMatch(message, gen_object:call(Obj, info))
+				end
+			},
+			{"gen_object: func",
+				fun() ->
+					Obj = gen_object:new(testobj4, 1),
+					?assertMatch([{res1, 2}, {res2, 3}], gen_object:call(Obj, {func, fun(I) -> I + 1 end}))
 				end
 			},
 			{"abstract_factory",
