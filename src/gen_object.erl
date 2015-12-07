@@ -140,31 +140,6 @@ loop(State) ->
 			proc_lib:hibernate(?MODULE, loop, [State])
 	end.
 
-resumeprocess(Ref, Result, #{stack := Stack} = State) ->
-	case maps:get(Ref, Stack, undefined) of
-		undefined ->
-			loop(State);
-		#{callback := Callback, context := Context, state := ProcessState} ->
-			#{class := Class} = ProcessState,
-			#{object := Object} = State,
-			case Callback of
-				{Function, Key} when is_atom(Function), is_atom(Key) ->
-					case catch Class:Function(Key, Result, Context, Object) of
-						Res ->
-							resultprocessing(Res, ProcessState, State#{stack => maps:remove(Ref, Stack)})
-					end;
-				Function when is_atom(Function) ->
-					case catch Class:Function(Result, Context, Object) of
-						Res ->
-							resultprocessing(Res, ProcessState, State#{stack => maps:remove(Ref, Stack)})
-					end;
-				_ ->
-					exit({not_matched, ?LINE, Callback})
-			end
-	end.
-
-preprocessing(#{type := func} = ProcessState, State) ->
-	processing(ProcessState, State);
 preprocessing(#{type := mcall, message_list := []} = ProcessState, State) ->
 	endprocess(ProcessState, State);
 preprocessing(#{type := mcall, message_list := [Message | MessageList]} = ProcessState, State) ->
@@ -172,20 +147,20 @@ preprocessing(#{type := mcall, message_list := [Message | MessageList]} = Proces
 preprocessing(ProcessState, State) ->
 	processing(ProcessState, State).
 
-processing(#{type := Type, message := Message, class := Class} = ProcessState, #{object := Object} = State) when Type == call; Type == mcall ->
-	case catch Class:handle_call(Message, Object) of
-		Res -> resultprocessing(Res, ProcessState, State)
-	end;
 processing(#{type := info, message := Message, class := Class} = ProcessState, #{object := Object} = State) ->
 	case catch Class:handle_info(Message, Object) of
 		Res -> resultprocessing(Res, ProcessState, State)
 	end;
-processing(#{type := func, mfa := {Module, Function, Argument}} = ProcessState, #{object := Object} = State) ->
-	case catch Module:Function(Argument, Object) of
+processing(#{type := Type, message := Message, class := Class} = ProcessState, #{object := Object} = State) when Type == call; Type == mcall ->
+	case catch Class:handle_call(Message, Object) of
 		Res -> resultprocessing(Res, ProcessState, State)
 	end;
-processing(#{type := func, mfa := {Function, Argument}, class := Class} = ProcessState, #{object := Object} = State) ->
+processing(#{type := Type, mfa := {Function, Argument}, class := Class} = ProcessState, #{object := Object} = State) when Type == next; Type == func ->
 	case catch Class:Function(Argument, Object) of
+		Res -> resultprocessing(Res, ProcessState, State)
+	end;
+processing(#{type := Type, mfa := {Module, Function, Argument}} = ProcessState, #{object := Object} = State) when Type == next; Type == func ->
+	case catch Module:Function(Argument, Object) of
 		Res -> resultprocessing(Res, ProcessState, State)
 	end.
 
@@ -213,6 +188,10 @@ resultprocessing(Res, #{type := Type} = ProcessState, State) ->
 			suspendprocess(Ref, Callback, Context, ProcessState, State);
 		{await, Ref, Callback, Context, Object} ->
 			suspendprocess(Ref, Callback, Context, ProcessState, State#{object => Object});
+		{next, MFA} ->
+			recurprocess(next, MFA, ProcessState, State);
+		{next, MFA, Object} ->
+			recurprocess(next, MFA, ProcessState, State#{object => Object});
 		{func, MFA, Callback, Context} ->
 			recurprocess(func, MFA, Callback, Context, ProcessState, State);
 		{func, MFA, Callback, Context, Object} ->
@@ -265,6 +244,43 @@ reply(ReplyTo, Ref, Result, State) ->
 
 suspendprocess(Ref, Callback, Context, ProcessState, #{stack := Stack} = State) ->
 	loop(State#{stack => maps:put(Ref, #{callback => Callback, context => Context, state => ProcessState}, Stack)}).
+
+resumeprocess(Ref, Result, #{stack := Stack} = State) ->
+	case maps:get(Ref, Stack, undefined) of
+		undefined ->
+			loop(State);
+		#{callback := Callback, context := Context, state := ProcessState} ->
+			#{class := Class} = ProcessState,
+			#{object := Object} = State,
+			case Callback of
+				{Function, Key} when is_atom(Function), is_atom(Key) ->
+					case catch Class:Function(Key, Result, Context, Object) of
+						Res ->
+							resultprocessing(Res, ProcessState, State#{stack => maps:remove(Ref, Stack)})
+					end;
+				Function when is_atom(Function) ->
+					case catch Class:Function(Result, Context, Object) of
+						Res ->
+							resultprocessing(Res, ProcessState, State#{stack => maps:remove(Ref, Stack)})
+					end;
+				_ ->
+					exit({not_matched, ?LINE, Callback})
+			end
+	end.
+
+recurprocess(next, MFA, #{type := next} = ProcessState, State) ->
+	preprocessing(ProcessState#{mfa => MFA}, State);
+
+recurprocess(next, MFA, #{class := Class} = ProcessState, #{stack := Stack} = State) ->
+	Ref = erlang:make_ref(),
+	preprocessing(
+		get_process_state(#{ 
+			class => Class, 
+			type => next, 
+			mfa => MFA,
+			from => self, 
+			ref => Ref}),
+		State#{stack => maps:put(Ref, #{state => ProcessState}, Stack)}).
 
 recurprocess(func, MFA, Callback, Context, #{class := Class} = ProcessState, #{stack := Stack} = State) ->
 	Ref = erlang:make_ref(),
