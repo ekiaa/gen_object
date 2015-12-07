@@ -174,11 +174,11 @@ resultprocessing(Res, #{type := Type} = ProcessState, State) ->
 			processing_appeal(ProcessState, State#{object => Object});
 		{reply, Result} when Type == mcall ->
 			postprocessing(Result, ProcessState, State);
-		{reply, Result} when Type == call; Type == func ->
+		{reply, Result} when Type == call; Type == next; Type == func ->
 			endprocess(ProcessState#{result => Result}, State);
 		{reply, Result, Object} when Type == mcall ->
 			postprocessing(Result, ProcessState, State#{object => Object});
-		{reply, Result, Object} when Type == call; Type == func ->
+		{reply, Result, Object} when Type == call; Type == next; Type == func ->
 			endprocess(ProcessState#{result => Result}, State#{object => Object});
 		noreply when Type == info ->
 			endprocess(ProcessState, State);
