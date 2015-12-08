@@ -164,7 +164,7 @@ processing(#{type := Type, mfa := {Module, Function, Argument}} = ProcessState, 
 		Res -> resultprocessing(Res, ProcessState, State)
 	end.
 
-resultprocessing(Res, #{type := Type} = ProcessState, State) ->
+resultprocessing(Res, ProcessState, State) ->
 	case Res of
 		{'EXIT', {function_clause, _}} ->
 			processing_appeal(ProcessState, State);
@@ -172,18 +172,14 @@ resultprocessing(Res, #{type := Type} = ProcessState, State) ->
 			processing_appeal(ProcessState, State);
 		{appeal, Object} -> 
 			processing_appeal(ProcessState, State#{object => Object});
-		{reply, Result} when Type == mcall ->
+		noreply ->
+			postprocessing(undefined, ProcessState, State);
+		{noreply, Object} ->
+			postprocessing(undefined, ProcessState, State#{object => Object});
+		{reply, Result} ->
 			postprocessing(Result, ProcessState, State);
-		{reply, Result} when Type == call; Type == next; Type == func ->
-			endprocess(ProcessState#{result => Result}, State);
-		{reply, Result, Object} when Type == mcall ->
+		{reply, Result, Object} ->
 			postprocessing(Result, ProcessState, State#{object => Object});
-		{reply, Result, Object} when Type == call; Type == next; Type == func ->
-			endprocess(ProcessState#{result => Result}, State#{object => Object});
-		noreply when Type == info ->
-			endprocess(ProcessState, State);
-		{noreply, Object} when Type == info ->
-			endprocess(ProcessState, State#{object => Object});
 		{await, Ref, Callback, Context} ->
 			suspendprocess(Ref, Callback, Context, ProcessState, State);
 		{await, Ref, Callback, Context, Object} ->
@@ -212,13 +208,20 @@ processing_appeal(#{class := Class} = ProcessState, #{ancestors := Ancestors} = 
 	Ancestor = maps:get(Class, Ancestors),
 	processing(ProcessState#{class => Ancestor}, State).
 
-postprocessing(Result, #{message := {Key, _}, result := CallResult} = ProcessState, State) when is_atom(Key) ->
+postprocessing(Result, #{type := mcall, message := {Key, _}, result := CallResult} = ProcessState, State) when is_atom(Key) ->
 	preprocessing(ProcessState#{result => maps:put(Key, Result, CallResult)}, State);
-postprocessing(Result, #{message := Key, result := CallResult} = ProcessState, State) when is_atom(Key) ->
+postprocessing(Result, #{type := mcall, message := Key, result := CallResult} = ProcessState, State) when is_atom(Key) ->
 	preprocessing(ProcessState#{result => maps:put(Key, Result, CallResult)}, State);
-postprocessing(Result, #{message := Message, result := CallResult} = ProcessState, State) ->
+postprocessing(Result, #{type := mcall, message := Message, result := CallResult} = ProcessState, State) ->
 	Key = erlang:phash2(Message),
-	preprocessing(ProcessState#{result => maps:put(Key, Result, CallResult)}, State).
+	preprocessing(ProcessState#{result => maps:put(Key, Result, CallResult)}, State);
+postprocessing(_Result, #{type := info} = ProcessState, State) ->
+	endprocess(ProcessState, State);
+postprocessing(Result, #{type := next, from := self, ref := Ref}, #{stack := Stack} = State) ->
+	#{state := ProcessState} = maps:get(Ref, Stack),
+	postprocessing(Result, ProcessState, State#{stack => maps:remove(Ref, Stack)});
+postprocessing(Result, ProcessState, State) ->
+	endprocess(ProcessState#{result => Result}, State).
 
 endprocess(#{type := info}, State) ->
 	loop(State);
