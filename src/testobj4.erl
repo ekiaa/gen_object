@@ -10,7 +10,7 @@ inherit() ->
 	gen_object.
 
 init(Param, Object) ->
-	Object#{param => Param}.
+	{ok, Object#{param => Param}}.
 
 handle_call({func, Func}, Object) when is_function(Func) ->
 	do_test(Object#{func => Func});

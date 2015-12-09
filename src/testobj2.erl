@@ -13,7 +13,7 @@ inherit() ->
 	gen_object.
 
 init(_Params, Object) ->
-	Object#{sum => 0}.
+	{ok, Object#{sum => 0}}.
 
 handle_call({key2, Value}, Object) ->
 	{reply, ok, Object#{key2 => Value}};

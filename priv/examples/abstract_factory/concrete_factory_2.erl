@@ -13,7 +13,7 @@ inherit() ->
 	abstract_factory.
 
 init(_Params, Object) ->
-	Object.
+	{ok, Object}.
 
 handle_call({create_product_A, Params}, #{count_A := Count_A} = Object) ->
 	Product_A = product_A2:create(Params),

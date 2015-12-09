@@ -13,7 +13,7 @@ inherit() ->
 	abstract_product_B.
 
 init(_Params, Object) ->
-	Object.
+	{ok, Object}.
 
 handle_call({multiply, Value}, #{multiplier := Multiplier}) ->
 	{reply, Multiplier * Value + 1};

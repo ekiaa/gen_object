@@ -13,10 +13,10 @@ inherit() ->
 	gen_object.
 
 init(#{key1 := _Key1} = Params, Object) ->
-	maps:merge(Object#{res => 0}, Params);
+	{ok, maps:merge(Object#{res => 0}, Params)};
 
 init(Params, Object) ->
-	maps:merge(Object, Params).
+	{ok, maps:merge(Object, Params)}.
 
 handle_call({sum, A, B}, _Object) when is_integer(A), is_integer(B) ->
 	{reply, A+B};

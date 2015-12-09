@@ -72,7 +72,9 @@ init_relationship(Params, #{class := Class} = State) ->
 	init_relationship(Class, Params, State).
 
 init_relationship(Successor, Params, #{ancestors := Ancestors, successors := Successors} = State) ->
-	case Successor:inherit() of
+	case catch Successor:inherit() of
+		{'EXIT', Reason} ->
+			exit({error, ?LINE, Reason});
 		?MODULE ->
 			init_object(Params, State#{
 				ancestors => maps:put(Successor, ?MODULE, Ancestors),
@@ -87,15 +89,41 @@ init_object(Params, #{successors := Successors} = State) ->
 	Successor = maps:get(?MODULE, Successors),
 	init_object(Successor, Params, State#{object => #{}}).
 
-init_object(Ancestor, Params, #{parent := Parent, class := Class, successors := Successors, object := AncestorObject} = State) ->
-	case Ancestor:init(Params, AncestorObject) of
-		SuccessorObject when Ancestor == Class ->
-			proc_lib:init_ack(Parent, {ok, self()}),
-			loop(State#{object => SuccessorObject});
-		SuccessorObject ->
-			Successor = maps:get(Ancestor, Successors),
-			init_object(Successor, Params, State#{object => SuccessorObject})
+init_object(Ancestor, Params, #{object := AncestorObject} = State) ->
+	case catch Ancestor:init(Params, AncestorObject) of
+		{'EXIT', Reason} ->
+			exit({error, ?LINE, Reason});
+		Result ->
+			init_object_result(Result, Ancestor, Params, State)
 	end.
+
+init_object_result(Result, Ancestor, _Params, #{parent := Parent, class := Class, stack := Stack} = State) when Ancestor == Class ->
+	proc_lib:init_ack(Parent, {ok, self()}),
+	case Result of
+		{ok, SuccessorObject} ->
+			loop(State#{object => SuccessorObject});
+		{next, MFA, SuccessorObject} -> 
+			Ref = erlang:make_ref(),
+			preprocessing(
+				get_process_state(#{ 
+					class => Class, 
+					type => next, 
+					mfa => MFA,
+					from => self, 
+					ref => Ref}),
+				State#{stack => maps:put(Ref, #{state => #{type => loop}}, Stack)});
+		_ ->
+			exit({bad_return, ?LINE, Result})
+	end;
+
+init_object_result(Result, Ancestor, Params, #{successors := Successors} = State) ->
+	SuccessorObject = case Result of
+		{ok, Object} -> Object;
+		{next, _, Object} -> Object;
+		_ -> exit({bad_return, ?LINE, Result})
+	end,
+	Successor = maps:get(Ancestor, Successors),
+	init_object(Successor, Params, State#{object => SuccessorObject}).
 
 loop(State) ->
 	receive
@@ -217,6 +245,8 @@ postprocessing(Result, #{type := mcall, message := Message, result := CallResult
 	preprocessing(ProcessState#{result => maps:put(Key, Result, CallResult)}, State);
 postprocessing(_Result, #{type := info} = ProcessState, State) ->
 	endprocess(ProcessState, State);
+postprocessing(_Result, #{type := loop}, State) ->
+	loop(State);
 postprocessing(Result, #{type := next, from := self, ref := Ref}, #{stack := Stack} = State) ->
 	#{state := ProcessState} = maps:get(Ref, Stack),
 	postprocessing(Result, ProcessState, State#{stack => maps:remove(Ref, Stack)});
@@ -456,10 +486,10 @@ gen_object_test_() ->
 			{"abstract_factory",
 				fun() ->
 					Factory_1 = concrete_factory_1:create(),
-					?assertMatch(true, is_pid(Factory_1)),
+					?assertMatch(Pid when is_pid(Pid), Factory_1),
 					
 					Product_A1 = abstract_factory:create_product_A(Factory_1, null),
-					?assertMatch(true, is_pid(Product_A1)),
+					?assertMatch(Pid when is_pid(Pid), Product_A1),
 					ValueA1_1 = abstract_product_A:increment(Product_A1),
 					?assertMatch(2, ValueA1_1),
 					ValueA1_2 = abstract_product_A:decrement(Product_A1),

@@ -13,9 +13,9 @@ inherit() ->
 	gen_object.
 
 init(#{multiplier := Multiplier}, _Object) when is_integer(Multiplier) ->
-	#{
+	{ok, #{
 		multiplier => Multiplier
-	}.
+	}}.
 
 handle_call({multiply, Value}, #{multiplier := Multiplier}) ->
 	{reply, Multiplier * Value};

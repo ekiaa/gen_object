@@ -22,10 +22,10 @@ inherit() ->
 	gen_object.
 
 init(_Params, _Object) ->
-	#{
+	{ok, #{
 		count_A => 0,
 		count_B => 0
-	}.
+	}}.
 
 handle_call(created_A, #{count_A := Count_A}) ->
 	{reply, Count_A};

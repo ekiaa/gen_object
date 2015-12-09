@@ -16,9 +16,9 @@ inherit() ->
 	gen_object.
 
 init(_Params, _Object) ->
-	#{
+	{ok, #{
 		counter => 0
-	}.
+	}}.
 
 handle_call(increment, #{counter := Counter} = Object) ->
 	Result = Counter + 1,

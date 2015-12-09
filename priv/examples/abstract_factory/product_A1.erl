@@ -13,7 +13,7 @@ inherit() ->
 	abstract_product_A.
 
 init(_Params, Object) ->
-	Object.
+	{ok, Object}.
 
 handle_call(increment, #{counter := Counter} = Object) ->
 	Result = Counter + 2,

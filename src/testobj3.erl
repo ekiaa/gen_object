@@ -10,7 +10,7 @@ inherit() ->
 	gen_object.
 
 init(Params, Object) ->
-	maps:merge(Object, Params).
+	{ok, maps:merge(Object, Params)}.
 
 handle_call(par1, Object) ->
 	do_get_param(par1, Object);
