@@ -4,7 +4,7 @@
 
 -export([inherit/0, init/2, handle_call/2, handle_info/2, terminate/2]).
 
--export([start/2, do_step4/3]).
+-export([start/2, do_step4/2]).
 
 start(Pid, Obj2) ->
 	gen_object:call(Pid, {start, Obj2}).
@@ -57,7 +57,7 @@ do_start(Obj2, #{key1 := Key1} = Object) ->
 	io:format("[testobj:do_start] Obj2: ~p; Key1: ~p; Key4: ~p; Ref: ~p~n", [Obj2, Key1, Key4, Ref]),
 	{await, Ref, do_step4, #{key4 => Key4}, Object}.
 
-do_step4(Sum, #{key4 := Key4}, Object) ->
+do_step4({Sum, #{key4 := Key4}}, Object) ->
 	Res = Sum * Key4,
 	io:format("[testobj:do_step4] Sum: ~p; Key4: ~p~n", [Sum, Key4]),
 	{reply, ok, Object#{res => Res}}.

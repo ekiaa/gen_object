@@ -4,7 +4,7 @@
 
 -export([inherit/0, init/2, handle_call/2, handle_info/2, terminate/2]).
 
--export([do_get_params_listing/4]).
+-export([do_get_params_listing/2]).
 
 inherit() ->
 	gen_object.
@@ -45,10 +45,10 @@ do_get_param(Key, Object) ->
 do_get_params_listing(Object) ->
 	{call, par1, {do_get_params_listing, par1}, #{res => "Params: "}, Object}.
 
-do_get_params_listing(par1, Par1, #{res := Res}, Object) ->
+do_get_params_listing({par1, Par1, #{res := Res}}, Object) ->
 	NewRes = Res ++ "par1 = " ++ Par1 ++ "; ",
 	{call, par2, {do_get_params_listing, par2}, #{res => NewRes}, Object};
 
-do_get_params_listing(par2, Par2, #{res := Res}, _Object) ->
+do_get_params_listing({par2, Par2, #{res := Res}}, _Object) ->
 	NewRes = Res ++ "par2 = " ++ Par2 ++ ".",
 	{reply, lists:flatten(NewRes)}.

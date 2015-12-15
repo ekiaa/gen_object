@@ -4,7 +4,7 @@
 
 -export([inherit/0, init/2, handle_call/2, handle_info/2, terminate/2]).
 
--export([do_test/4, do_smth/2]).
+-export([do_test/2, do_smth/2]).
 
 inherit() ->
 	gen_object.
@@ -25,15 +25,15 @@ terminate(_Reason, _Object) ->
 	ok.
 
 do_test(Object) ->
-	do_test(step1, [], Object).
+	do_test({step1, []}, Object).
 
-do_test(step1, List, #{func := Func, param := Param} = Object) ->
-	{func, {do_smth, test1}, {do_test, step2}, List, Object#{param => Func(Param)}}.
+do_test({step1, List}, #{func := Func, param := Param} = Object) ->
+	{func, {do_smth, test1}, {do_test, step2}, List, Object#{param => Func(Param)}};
 
-do_test(step2, Res1, List, #{func := Func, param := Param} = Object) ->
+do_test({step2, Res1, List}, #{func := Func, param := Param} = Object) ->
 	{func, {?MODULE, do_smth, test2}, {do_test, step3}, [Res1 | List], Object#{param => Func(Param)}};
 
-do_test(step3, Res2, List, _Object) ->
+do_test({step3, Res2, List}, _Object) ->
 	{reply, lists:reverse([Res2 | List])}.
 
 do_smth(test1, #{param := Param}) ->

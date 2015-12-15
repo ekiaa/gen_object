@@ -287,12 +287,12 @@ resumeprocess(Ref, Result, #{stack := Stack} = State) ->
 			#{object := Object} = State,
 			case Callback of
 				{Function, Key} when is_atom(Function), is_atom(Key) ->
-					case catch Class:Function(Key, Result, Context, Object) of
+					case catch Class:Function({Key, Result, Context}, Object) of
 						Res ->
 							resultprocessing(Res, ProcessState, State#{stack => maps:remove(Ref, Stack)})
 					end;
 				Function when is_atom(Function) ->
-					case catch Class:Function(Result, Context, Object) of
+					case catch Class:Function({Result, Context}, Object) of
 						Res ->
 							resultprocessing(Res, ProcessState, State#{stack => maps:remove(Ref, Stack)})
 					end;
