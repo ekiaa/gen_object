@@ -208,26 +208,26 @@ resultprocessing(Res, ProcessState, State) ->
 			postprocessing(Result, ProcessState, State);
 		{reply, Result, Object} ->
 			postprocessing(Result, ProcessState, State#{object => Object});
-		{await, Ref, Callback, Context} ->
-			suspendprocess(Ref, Callback, Context, ProcessState, State);
-		{await, Ref, Callback, Context, Object} ->
-			suspendprocess(Ref, Callback, Context, ProcessState, State#{object => Object});
+		{await, Ref, Callback} ->
+			suspendprocess(Ref, Callback, ProcessState, State);
+		{await, Ref, Callback, Object} ->
+			suspendprocess(Ref, Callback, ProcessState, State#{object => Object});
 		{next, MFA} ->
 			recurprocess(next, MFA, ProcessState, State);
 		{next, MFA, Object} ->
 			recurprocess(next, MFA, ProcessState, State#{object => Object});
-		{func, MFA, Callback, Context} ->
-			recurprocess(func, MFA, Callback, Context, ProcessState, State);
-		{func, MFA, Callback, Context, Object} ->
-			recurprocess(func, MFA, Callback, Context, ProcessState, State#{object => Object});
-		{call, Message, Callback, Context} ->
-			recurprocess(call, Message, Callback, Context, ProcessState, State);
-		{call, Message, Callback, Context, Object} ->
-			recurprocess(call, Message, Callback, Context, ProcessState, State#{object => Object});
-		{mcall, MessageList, Callback, Context} ->
-			recurprocess(mcall, MessageList, Callback, Context, ProcessState, State);
-		{mcall, MessageList, Callback, Context, Object} ->
-			recurprocess(mcall, MessageList, Callback, Context, ProcessState, State#{object => Object});
+		{func, MFA, Callback} ->
+			recurprocess(func, MFA, Callback, ProcessState, State);
+		{func, MFA, Callback, Object} ->
+			recurprocess(func, MFA, Callback, ProcessState, State#{object => Object});
+		{call, Message, Callback} ->
+			recurprocess(call, Message, Callback, ProcessState, State);
+		{call, Message, Callback, Object} ->
+			recurprocess(call, Message, Callback, ProcessState, State#{object => Object});
+		{mcall, MessageList, Callback} ->
+			recurprocess(mcall, MessageList, Callback, ProcessState, State);
+		{mcall, MessageList, Callback, Object} ->
+			recurprocess(mcall, MessageList, Callback, ProcessState, State#{object => Object});
 		_ ->
 			exit({bad_return, ?LINE, Res})
 	end.
@@ -275,24 +275,29 @@ reply(ReplyTo, Ref, Result, State) ->
 	ReplyTo ! {Ref, Result},
 	loop(State).
 
-suspendprocess(Ref, Callback, Context, ProcessState, #{stack := Stack} = State) ->
-	loop(State#{stack => maps:put(Ref, #{callback => Callback, context => Context, state => ProcessState}, Stack)}).
+suspendprocess(Ref, Callback, ProcessState, #{stack := Stack} = State) ->
+	loop(State#{stack => maps:put(Ref, #{callback => Callback, state => ProcessState}, Stack)}).
 
 resumeprocess(Ref, Result, #{stack := Stack} = State) ->
 	case maps:get(Ref, Stack, undefined) of
 		undefined ->
 			loop(State);
-		#{callback := Callback, context := Context, state := ProcessState} ->
+		#{callback := Callback, state := ProcessState} ->
 			#{class := Class} = ProcessState,
 			#{object := Object} = State,
 			case Callback of
-				{Function, Key} when is_atom(Function), is_atom(Key) ->
-					case catch Class:Function({Key, Result, Context}, Object) of
+				Function when is_atom(Function) ->
+					case catch Class:Function(Result, Object) of
 						Res ->
 							resultprocessing(Res, ProcessState, State#{stack => maps:remove(Ref, Stack)})
 					end;
-				Function when is_atom(Function) ->
-					case catch Class:Function({Result, Context}, Object) of
+				{Function, Key} when is_atom(Function), is_atom(Key) ->
+					case catch Class:Function({Key, Result}, Object) of
+						Res ->
+							resultprocessing(Res, ProcessState, State#{stack => maps:remove(Ref, Stack)})
+					end;
+				{Function, Key, Context} when is_atom(Function), is_atom(Key) ->
+					case catch Class:Function({Key, Result, Context}, Object) of
 						Res ->
 							resultprocessing(Res, ProcessState, State#{stack => maps:remove(Ref, Stack)})
 					end;
@@ -315,7 +320,7 @@ recurprocess(next, MFA, #{class := Class} = ProcessState, #{stack := Stack} = St
 			ref => Ref}),
 		State#{stack => maps:put(Ref, #{state => ProcessState}, Stack)}).
 
-recurprocess(func, MFA, Callback, Context, #{class := Class} = ProcessState, #{stack := Stack} = State) ->
+recurprocess(func, MFA, Callback, #{class := Class} = ProcessState, #{stack := Stack} = State) ->
 	Ref = erlang:make_ref(),
 	preprocessing(
 		get_process_state(#{ 
@@ -324,9 +329,9 @@ recurprocess(func, MFA, Callback, Context, #{class := Class} = ProcessState, #{s
 			mfa => MFA,
 			from => self, 
 			ref => Ref}),
-		State#{stack => maps:put(Ref, #{callback => Callback, context => Context, state => ProcessState}, Stack)});
+		State#{stack => maps:put(Ref, #{callback => Callback, state => ProcessState}, Stack)});
 
-recurprocess(call, Message, Callback, Context, #{class := Class} = ProcessState, #{stack := Stack} = State) ->
+recurprocess(call, Message, Callback, #{class := Class} = ProcessState, #{stack := Stack} = State) ->
 	Ref = erlang:make_ref(),
 	preprocessing(
 		get_process_state(#{
@@ -335,9 +340,9 @@ recurprocess(call, Message, Callback, Context, #{class := Class} = ProcessState,
 			message => Message,
 			from => self, 
 			ref => Ref}),
-		State#{stack => maps:put(Ref, #{callback => Callback, context => Context, state => ProcessState}, Stack)});
+		State#{stack => maps:put(Ref, #{callback => Callback, state => ProcessState}, Stack)});
 
-recurprocess(mcall, MessageList, Callback, Context, #{class := Class} = ProcessState, #{stack := Stack} = State) ->
+recurprocess(mcall, MessageList, Callback, #{class := Class} = ProcessState, #{stack := Stack} = State) ->
 	Ref = erlang:make_ref(),
 	preprocessing(
 		get_process_state(#{
@@ -347,7 +352,7 @@ recurprocess(mcall, MessageList, Callback, Context, #{class := Class} = ProcessS
 			result => #{},
 			from => self, 
 			ref => Ref}),
-		State#{stack => maps:put(Ref, #{callback => Callback, context => Context, state => ProcessState}, Stack)}).
+		State#{stack => maps:put(Ref, #{callback => Callback, state => ProcessState}, Stack)}).
 
 handle_call(_Message, _Object) ->
 	{reply, undefined}.

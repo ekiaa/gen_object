@@ -55,9 +55,9 @@ do_start(Obj2, #{key1 := Key1} = Object) ->
 	Ref = testobj2:step1({async, Obj2}, Key1, self()),
 	Key4 = 2 * Key1,
 	io:format("[testobj:do_start] Obj2: ~p; Key1: ~p; Key4: ~p; Ref: ~p~n", [Obj2, Key1, Key4, Ref]),
-	{await, Ref, do_step4, #{key4 => Key4}, Object}.
+	{await, Ref, {do_step4, res, #{key4 => Key4}}, Object}.
 
-do_step4({Sum, #{key4 := Key4}}, Object) ->
+do_step4({res, Sum, #{key4 := Key4}}, Object) ->
 	Res = Sum * Key4,
 	io:format("[testobj:do_step4] Sum: ~p; Key4: ~p~n", [Sum, Key4]),
 	{reply, ok, Object#{res => Res}}.

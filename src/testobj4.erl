@@ -28,10 +28,10 @@ do_test(Object) ->
 	do_test({step1, []}, Object).
 
 do_test({step1, List}, #{func := Func, param := Param} = Object) ->
-	{func, {do_smth, test1}, {do_test, step2}, List, Object#{param => Func(Param)}};
+	{func, {do_smth, test1}, {do_test, step2, List}, Object#{param => Func(Param)}};
 
 do_test({step2, Res1, List}, #{func := Func, param := Param} = Object) ->
-	{func, {?MODULE, do_smth, test2}, {do_test, step3}, [Res1 | List], Object#{param => Func(Param)}};
+	{func, {?MODULE, do_smth, test2}, {do_test, step3, [Res1 | List]}, Object#{param => Func(Param)}};
 
 do_test({step3, Res2, List}, _Object) ->
 	{reply, lists:reverse([Res2 | List])}.
