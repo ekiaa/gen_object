@@ -30,9 +30,9 @@ start_link(Class, Params) ->
 
 call(Pid, Message) ->
 	call(Pid, Message, 5000).
-call({async, Pid}, Message, _Timeout) when is_pid(Pid) ->
+call({async, Pid}, Message, _Timeout) ->
 	send(call, Pid, Message);
-call(Pid, Message, Timeout) when is_pid(Pid), is_integer(Timeout), Timeout > 0; Timeout == infinity ->
+call(Pid, Message, Timeout) when is_integer(Timeout), Timeout > 0; Timeout == infinity ->
 	Ref = send(call, Pid, Message),
 	receive
 		{Ref, Result} -> Result
@@ -42,9 +42,9 @@ call(Pid, Message, Timeout) when is_pid(Pid), is_integer(Timeout), Timeout > 0; 
 
 mcall(Pid, MessageList) ->
 	mcall(Pid, MessageList, 5000).
-mcall({async, Pid}, MessageList, _Timeout) when is_pid(Pid), is_list(MessageList) ->
+mcall({async, Pid}, MessageList, _Timeout) when is_list(MessageList) ->
 	send(mcall, Pid, MessageList);
-mcall(Pid, MessageList, Timeout) when is_pid(Pid), is_list(MessageList), is_integer(Timeout), Timeout > 0; Timeout == infinity ->
+mcall(Pid, MessageList, Timeout) when is_list(MessageList), is_integer(Timeout), Timeout > 0; Timeout == infinity ->
 	Ref = send(mcall, Pid, MessageList),
 	receive
 		{Ref, Result} -> Result
@@ -52,12 +52,12 @@ mcall(Pid, MessageList, Timeout) when is_pid(Pid), is_list(MessageList), is_inte
 		Timeout -> {error, timeout}
 	end.
 
-send(Type, Pid, Message) when is_pid(Pid) ->
+send(Type, Pid, Message) when is_pid(Pid); is_atom(Pid) ->
 	Ref = erlang:make_ref(),
 	Pid ! {Type, Message, self(), Ref},
 	Ref.
 
-delete(Pid) when is_pid(Pid) ->
+delete(Pid) when is_pid(Pid); is_atom(Pid) ->
 	Pid ! {delete, self()},
 	ok.
 
@@ -98,11 +98,12 @@ init_object(Ancestor, Params, #{object := AncestorObject} = State) ->
 	end.
 
 init_object_result(Result, Ancestor, _Params, #{parent := Parent, class := Class, stack := Stack} = State) when Ancestor == Class ->
-	proc_lib:init_ack(Parent, {ok, self()}),
 	case Result of
 		{ok, SuccessorObject} ->
+			proc_lib:init_ack(Parent, {ok, self()}),
 			loop(State#{object => SuccessorObject});
 		{next, MFA, SuccessorObject} -> 
+			proc_lib:init_ack(Parent, {ok, self()}),
 			Ref = erlang:make_ref(),
 			preprocessing(
 				get_process_state(#{ 
@@ -112,8 +113,13 @@ init_object_result(Result, Ancestor, _Params, #{parent := Parent, class := Class
 					from => self, 
 					ref => Ref}),
 				State#{stack => maps:put(Ref, #{state => #{type => loop}}, Stack)});
+		{error, Reason} ->
+			proc_lib:init_ack(Parent, {error, Reason}),
+			exit({error, Reason});
 		_ ->
-			exit({bad_return, ?LINE, Result})
+			Reason = {bad_return, ?LINE, Result},
+			proc_lib:init_ack(Parent, {error, Reason}),
+			exit(Reason)
 	end;
 
 init_object_result(Result, Ancestor, Params, #{successors := Successors} = State) ->
