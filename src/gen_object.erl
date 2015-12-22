@@ -380,7 +380,7 @@ system_replace_state(StateFun, State) ->
 	NewState = StateFun(State),
 	{ok, NewState, NewState}.
 
-terminate(Reason, #{object := #{class := Class} = Object}) ->
+terminate(Reason, #{class := Class, object := Object}) ->
 	case catch Class:terminate(Reason, Object) of
 		{'EXIT', R} ->
 			exit(R);

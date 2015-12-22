@@ -6,7 +6,7 @@
 -export([inherit/0, init/2, handle_call/2, handle_info/2, terminate/2]).
 
 % Public
--export([start/1, register/3, unregister/2, lookup/2]).
+-export([start/1, stop/1, register/3, unregister/2, lookup/2]).
 
 % Private
 -export([]).
@@ -20,14 +20,30 @@
 start(Registry) when is_atom(Registry) ->
 	gen_object:start_link(?MODULE, #{registry => Registry}).
 
+stop(Registry) ->
+	gen_object:delete(Registry).
+
 register(Registry, Name, Process) when is_pid(Process) ->
 	gen_object:call(Registry, {register, Name, Process}).
 
-unregister(Registry, Name) ->
-	ok.
+unregister(Registry, NameOrProcess) ->
+	gen_object:call(Registry, {unregister, NameOrProcess}).
 
-lookup(Registry, Name) ->
-	ok.
+lookup(Registry, Process) when is_atom(Registry), is_pid(Process) ->
+	case ets:lookup(Registry, Process) of
+		[] ->
+			{error, not_found_process};
+		[{Process, NameList, _}] ->
+			{ok, NameList}
+	end;
+
+lookup(Registry, Name) when is_atom(Registry) ->
+	case ets:lookup(Registry, Name) of
+		[] ->
+			{error, not_found_name};
+		[{Name, Process}] ->
+			{ok, Process}
+	end.
 
 %===============================================================================
 
@@ -55,13 +71,40 @@ handle_call({register, Name, Process}, #{registry := Registry}) when is_pid(Proc
 				[] ->
 					Ref = erlang:monitor(process, Process),
 					ets:insert(Registry, {Process, [Name], Ref}),
-					{reply, true};
+					{reply, ok};
 				[{Process, NameList, Ref}] ->
 					ets:insert(Registry, {Process, [Name | NameList], Ref}),
-					{reply, true}
+					{reply, ok}
 			end;
 		false ->
-			{reply, false}
+			{reply, {error, already_exists}}
+	end;
+
+handle_call({unregister, Process}, #{registry := Registry}) when is_pid(Process) ->
+	case ets:lookup(Registry, Process) of
+		[] ->
+			{reply, {error, not_found_process}};
+		[{Process, NameList, Ref}] ->
+			erlang:demonitor(Ref),
+			ets:delete(Registry, Process),
+			[ets:delete(Registry, N) || N <- NameList],
+			{reply, ok}
+	end;
+
+handle_call({unregister, Name}, #{registry := Registry}) ->
+	case ets:lookup(Registry, Name) of
+		[] ->
+			{reply, {error, not_found_name}};
+		[{Name, Process}] ->
+			case ets:lookup(Registry, Process) of
+				[] ->
+					{reply, {error, not_found_process}};
+				[{Process, NameList, Ref}] ->
+					erlang:demonitor(Ref),
+					ets:delete(Registry, Process),
+					[ets:delete(Registry, N) || N <- NameList],
+					{reply, ok}
+			end
 	end;
 
 handle_call(_Msg, _Object) ->
@@ -74,7 +117,8 @@ handle_info(_Info, _Object) ->
 
 %-------------------------------------------------------------------------------
 
-terminate(_Reason, _Object) ->
+terminate(_Reason, #{registry := Registry}) ->
+	ets:delete(Registry),
 	ok.
 
 %===============================================================================
@@ -86,21 +130,56 @@ gen_object_test_() ->
 		fun setup/0,
 		fun cleanup/1,
 		[
-			{"eom_process_registry: start",
+			{"eom_process_registry: start, stop",
 				fun() ->
 					Registry = test_registry,
 					?assertMatch({ok, Pid} when is_pid(Pid), eom_process_registry:start(Registry)),
-					?assertMatch(Registry, ets:info(Registry, name))
+					?assertMatch(Registry, ets:info(Registry, name)),
+					eom_process_registry:stop(Registry),
+					timer:sleep(10),
+					?assertMatch(undefined, ets:info(Registry, name))
 				end
 			},
 			{"eom_process_registry: register",
 				fun() ->
-					Registry = test_registry_1,
+					Registry = test_registry,
 					Process = self(),
 					{ok, _} = eom_process_registry:start(Registry),
-					?assertMatch(true, eom_process_registry:register(Registry, test_1, Process)),
-					?assertMatch(true, eom_process_registry:register(Registry, test_2, Process)),
-					?assertMatch(false, eom_process_registry:register(Registry, test_1, Process))
+					?assertMatch(ok, eom_process_registry:register(Registry, test_1, Process)),
+					?assertMatch(ok, eom_process_registry:register(Registry, test_2, Process)),
+					?assertMatch({error, already_exists}, eom_process_registry:register(Registry, test_1, Process)),
+					eom_process_registry:stop(Registry)
+				end
+			},
+			{"eom_process_registry: unregister",
+				fun() ->
+					Registry = test_registry,
+					Process = self(),
+					{ok, _} = eom_process_registry:start(Registry),
+					eom_process_registry:register(Registry, test_1, Process),
+					?assertMatch(ok, eom_process_registry:unregister(Registry, test_1)),
+					eom_process_registry:register(Registry, test_1, Process),
+					?assertMatch(ok, eom_process_registry:unregister(Registry, Process)),
+					?assertMatch({error, not_found_name}, eom_process_registry:unregister(Registry, test_2)),
+					?assertMatch({error, not_found_process}, eom_process_registry:unregister(Registry, Process)),
+					eom_process_registry:stop(Registry)
+				end
+			},
+			{"eom_process_registry: lookup",
+				fun() ->
+					Registry = test_registry,
+					Process = self(),
+					{ok, _} = eom_process_registry:start(Registry),
+					eom_process_registry:register(Registry, test_1, Process),
+					?assertMatch({ok, Process}, eom_process_registry:lookup(Registry, test_1)),
+					?assertMatch({error, not_found_name}, eom_process_registry:lookup(Registry, test_2)),
+					?assertMatch({ok, [test_1]}, eom_process_registry:lookup(Registry, Process)),
+					[OtherProcess | _] = erlang:processes(),
+					?assertMatch({error, not_found_process}, eom_process_registry:lookup(Registry, OtherProcess)),
+					eom_process_registry:register(Registry, test_2, Process),
+					?assertMatch({ok, Process}, eom_process_registry:lookup(Registry, test_2)),
+					?assertMatch({ok, [test_2, test_1]}, eom_process_registry:lookup(Registry, Process)),
+					eom_process_registry:stop(Registry)
 				end
 			}
 		]
