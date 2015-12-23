@@ -30,20 +30,15 @@ unregister(Registry, NameOrProcess) ->
 	gen_object:call(Registry, {unregister, NameOrProcess}).
 
 lookup(Registry, Process) when is_atom(Registry), is_pid(Process) ->
-	case ets:lookup(Registry, Process) of
-		[] ->
-			{error, not_found_process};
-		[{Process, NameList, _}] ->
-			{ok, NameList}
+	case lookup_process(Registry, Process) of
+		{ok, NameList, _Ref} ->
+			{ok, NameList};
+		Result ->
+			Result
 	end;
 
 lookup(Registry, Name) when is_atom(Registry) ->
-	case ets:lookup(Registry, Name) of
-		[] ->
-			{error, not_found_name};
-		[{Name, Process}] ->
-			{ok, Process}
-	end.
+	lookup_name(Registry, Name).
 
 %===============================================================================
 
@@ -67,13 +62,13 @@ init(#{registry := Registry}, Object) when is_atom(Registry) ->
 handle_call({register, Name, Process}, #{registry := Registry}) when is_pid(Process)  ->
 	case ets:insert_new(Registry, {Name, Process}) of
 		true ->
-			case ets:lookup(Registry, Process) of
-				[] ->
+			case lookup_process(Registry, Process) of
+				{ok, NameList, Ref} ->
+					ets:insert(Registry, {Process, [Name | NameList], Ref}),
+					{reply, ok};
+				{error, _Reason} ->
 					Ref = erlang:monitor(process, Process),
 					ets:insert(Registry, {Process, [Name], Ref}),
-					{reply, ok};
-				[{Process, NameList, Ref}] ->
-					ets:insert(Registry, {Process, [Name | NameList], Ref}),
 					{reply, ok}
 			end;
 		false ->
@@ -81,36 +76,26 @@ handle_call({register, Name, Process}, #{registry := Registry}) when is_pid(Proc
 	end;
 
 handle_call({unregister, Process}, #{registry := Registry}) when is_pid(Process) ->
-	case ets:lookup(Registry, Process) of
-		[] ->
-			{reply, {error, not_found_process}};
-		[{Process, NameList, Ref}] ->
-			erlang:demonitor(Ref),
-			ets:delete(Registry, Process),
-			[ets:delete(Registry, N) || N <- NameList],
-			{reply, ok}
-	end;
+	Result = delete(Registry, Process),
+	{reply, Result};
 
 handle_call({unregister, Name}, #{registry := Registry}) ->
-	case ets:lookup(Registry, Name) of
-		[] ->
-			{reply, {error, not_found_name}};
-		[{Name, Process}] ->
-			case ets:lookup(Registry, Process) of
-				[] ->
-					{reply, {error, not_found_process}};
-				[{Process, NameList, Ref}] ->
-					erlang:demonitor(Ref),
-					ets:delete(Registry, Process),
-					[ets:delete(Registry, N) || N <- NameList],
-					{reply, ok}
-			end
+	case lookup_name(Registry, Name) of
+		{ok, Process} ->
+			Result = delete(Registry, Process),
+			{reply, Result};
+		Result ->
+			{reply, Result}
 	end;
 
 handle_call(_Msg, _Object) ->
 	appeal.
 
 %-------------------------------------------------------------------------------
+
+handle_info({'DOWN', _Ref, _Type, Process, _Info}, #{registry := Registry}) ->
+	delete(Registry, Process),
+	noreply;
 
 handle_info(_Info, _Object) ->
 	appeal.
@@ -123,16 +108,45 @@ terminate(_Reason, #{registry := Registry}) ->
 
 %===============================================================================
 
+lookup_name(Registry, Name) ->
+	case ets:lookup(Registry, Name) of
+		[] ->
+			{error, not_found_name};
+		[{Name, Process}] ->
+			{ok, Process}
+	end.
+
+lookup_process(Registry, Process) ->
+	case ets:lookup(Registry, Process) of
+		[] ->
+			{error, not_found_process};
+		[{Process, NameList, Ref}] ->
+			{ok, NameList, Ref}
+	end.
+
+delete(Registry, Process) ->
+	case ets:lookup(Registry, Process) of
+		[] ->
+			{error, not_found_process};
+		[{Process, NameList, Ref}] ->
+			erlang:demonitor(Ref),
+			ets:delete(Registry, Process),
+			[ets:delete(Registry, N) || N <- NameList],
+			ok
+	end.
+
+%===============================================================================
+
 -ifdef(TEST).
 
 gen_object_test_() ->
+	Registry = test_registry,
 	{foreach,
 		fun setup/0,
 		fun cleanup/1,
 		[
 			{"eom_process_registry: start, stop",
 				fun() ->
-					Registry = test_registry,
 					?assertMatch({ok, Pid} when is_pid(Pid), eom_process_registry:start(Registry)),
 					?assertMatch(Registry, ets:info(Registry, name)),
 					eom_process_registry:stop(Registry),
@@ -142,7 +156,6 @@ gen_object_test_() ->
 			},
 			{"eom_process_registry: register",
 				fun() ->
-					Registry = test_registry,
 					Process = self(),
 					{ok, _} = eom_process_registry:start(Registry),
 					?assertMatch(ok, eom_process_registry:register(Registry, test_1, Process)),
@@ -153,7 +166,6 @@ gen_object_test_() ->
 			},
 			{"eom_process_registry: unregister",
 				fun() ->
-					Registry = test_registry,
 					Process = self(),
 					{ok, _} = eom_process_registry:start(Registry),
 					eom_process_registry:register(Registry, test_1, Process),
@@ -167,7 +179,6 @@ gen_object_test_() ->
 			},
 			{"eom_process_registry: lookup",
 				fun() ->
-					Registry = test_registry,
 					Process = self(),
 					{ok, _} = eom_process_registry:start(Registry),
 					eom_process_registry:register(Registry, test_1, Process),
@@ -179,6 +190,17 @@ gen_object_test_() ->
 					eom_process_registry:register(Registry, test_2, Process),
 					?assertMatch({ok, Process}, eom_process_registry:lookup(Registry, test_2)),
 					?assertMatch({ok, [test_2, test_1]}, eom_process_registry:lookup(Registry, Process)),
+					eom_process_registry:stop(Registry)
+				end
+			},
+			{"eom_process_registry: monitor",
+				fun() ->
+					{ok, _} = eom_process_registry:start(Registry),
+					Process = spawn(fun() -> receive stop -> ok end end),
+					eom_process_registry:register(Registry, test, Process),
+					Process ! stop,
+					timer:sleep(10),
+					?assertMatch({error, not_found_name}, eom_process_registry:lookup(Registry, test)),
 					eom_process_registry:stop(Registry)
 				end
 			}
