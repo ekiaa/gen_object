@@ -2,7 +2,7 @@
 
 -behaviour(gen_object).
 
--export([inherit/0, init/2, handle_call/2, handle_info/2, terminate/2]).
+-export([inherit/1, init/2, handle_call/2, handle_info/2, terminate/2]).
 
 -export([create_product_A/2, create_product_B/2, created_A/1, created_B/1]).
 
@@ -18,8 +18,8 @@ created_A(Obj) ->
 created_B(Obj) ->
 	gen_object:call(Obj, created_B).
 
-inherit() ->
-	gen_object.
+inherit(Params) ->
+	{gen_object, Params}.
 
 init(_Params, _Object) ->
 	{ok, #{

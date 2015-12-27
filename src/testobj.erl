@@ -2,15 +2,15 @@
 
 -behaviour(gen_object).
 
--export([inherit/0, init/2, handle_call/2, handle_info/2, terminate/2]).
+-export([inherit/1, init/2, handle_call/2, handle_info/2, terminate/2]).
 
 -export([start/2, do_step4/2]).
 
 start(Pid, Obj2) ->
 	gen_object:call(Pid, {start, Obj2}).
 
-inherit() ->
-	gen_object.
+inherit(Params) ->
+	{gen_object, Params}.
 
 init(#{key1 := _Key1} = Params, Object) ->
 	{ok, maps:merge(Object#{res => 0}, Params)};

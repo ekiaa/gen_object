@@ -2,15 +2,15 @@
 
 -behaviour(gen_object).
 
--export([inherit/0, init/2, handle_call/2, handle_info/2, terminate/2]).
+-export([inherit/1, init/2, handle_call/2, handle_info/2, terminate/2]).
 
 -export([create/0]).
 
 create() ->
 	gen_object:new(?MODULE, null).
 
-inherit() ->
-	abstract_factory.
+inherit(Params) ->
+	{abstract_factory, Params}.
 
 init(_Params, Object) ->
 	{ok, Object}.

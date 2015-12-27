@@ -3,7 +3,7 @@
 -behaviour(gen_object).
 
 % gen_object
--export([inherit/0, init/2, handle_call/2, handle_info/2, terminate/2]).
+-export([inherit/1, init/2, handle_call/2, handle_info/2, terminate/2]).
 
 % Public
 -export([start/1, stop/1, register/3, unregister/2, lookup/2]).
@@ -42,8 +42,8 @@ lookup(Registry, Name) when is_atom(Registry) ->
 
 %===============================================================================
 
-inherit() ->
-	gen_object.
+inherit(Params) ->
+	{gen_object, Params}.
 
 %-------------------------------------------------------------------------------
 

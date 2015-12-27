@@ -2,15 +2,15 @@
 
 -behaviour(gen_object).
 
--export([inherit/0, init/2, handle_call/2, handle_info/2, terminate/2]).
+-export([inherit/1, init/2, handle_call/2, handle_info/2, terminate/2]).
 
 -export([step1/3, do_step3/2]).
 
 step1(Pid, Key1, From) ->
 	gen_object:call(Pid, {step1, {Key1, From}}).
 
-inherit() ->
-	gen_object.
+inherit(Params) ->
+	{gen_object, Params}.
 
 init(_Params, Object) ->
 	{ok, Object#{sum => 0}}.

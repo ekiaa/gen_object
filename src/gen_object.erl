@@ -12,7 +12,7 @@
 
 behaviour_info(callbacks) ->
 	[
-		{inherit, 0},
+		{inherit, 1},
 		{init, 2},
 		{handle_call, 2},
 		{handle_info, 2},
@@ -71,15 +71,21 @@ init(Params, State) ->
 init_relationship(Params, #{class := Class} = State) ->
 	init_relationship(Class, Params, State).
 
-init_relationship(Successor, Params, #{ancestors := Ancestors, successors := Successors} = State) ->
-	case catch Successor:inherit() of
+init_relationship(Successor, Params, State) ->
+	case catch Successor:inherit(Params) of
+		Result ->
+			inherit_result(Result, Successor, State)
+	end.
+
+inherit_result(Result, Successor, #{ancestors := Ancestors, successors := Successors} = State) ->
+	case Result of
 		{'EXIT', Reason} ->
 			exit({error, ?LINE, Reason});
-		?MODULE ->
+		{?MODULE, Params} ->
 			init_object(Params, State#{
 				ancestors => maps:put(Successor, ?MODULE, Ancestors),
 				successors => maps:put(?MODULE, Successor, Successors)});
-		Ancestor when is_atom(Ancestor) ->
+		{Ancestor, Params} when is_atom(Ancestor) ->
 			init_relationship(Ancestor, Params, State#{
 				ancestors => maps:put(Successor, Ancestor, Ancestors),
 				successors => maps:put(Ancestor, Successor, Successors)})

@@ -2,12 +2,12 @@
 
 -behaviour(gen_object).
 
--export([inherit/0, init/2, handle_call/2, handle_info/2, terminate/2]).
+-export([inherit/1, init/2, handle_call/2, handle_info/2, terminate/2]).
 
 -export([do_test/2, do_smth/2]).
 
-inherit() ->
-	gen_object.
+inherit(Params) ->
+	{gen_object, Params}.
 
 init(Param, Object) ->
 	{ok, Object#{param => Param}}.

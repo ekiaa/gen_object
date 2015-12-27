@@ -2,15 +2,15 @@
 
 -behaviour(gen_object).
 
--export([inherit/0, init/2, handle_call/2, handle_info/2, terminate/2]).
+-export([inherit/1, init/2, handle_call/2, handle_info/2, terminate/2]).
 
 -export([multiply/2]).
 
 multiply(Obj, Value) ->
 	gen_object:call(Obj, {multiply, Value}).
 
-inherit() ->
-	gen_object.
+inherit(Params) ->
+	{gen_object, Params}.
 
 init(#{multiplier := Multiplier}, _Object) when is_integer(Multiplier) ->
 	{ok, #{
