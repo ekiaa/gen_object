@@ -1,6 +1,6 @@
 -module(gen_object).
 
--export([new/2, start_link/2, call/2, call/3, mcall/2, mcall/3, delete/1, init/2, loop/1]).
+-export([new/1, new/2, start_link/2, call/2, call/3, mcall/2, mcall/3, delete/1, init/2, loop/1]).
 
 -export([handle_call/2, handle_info/2]).
 
@@ -19,7 +19,10 @@ behaviour_info(callbacks) ->
 		{terminate, 2}
 	].
 
-new(Class, Params) ->
+new(Class) ->
+	new(Class, #{}).
+
+new(Class, Params) when is_map(Params) ->
 	case start_link(Class, Params) of
 		{ok, Pid} -> Pid;
 		Result -> Result
@@ -28,6 +31,8 @@ new(Class, Params) ->
 start_link(Class, Params) ->
 	proc_lib:start_link(?MODULE, init, [Params, #{parent => self(), class => Class}]).
 
+call(Pid, Message) when Pid == self() ->
+	Message;
 call(Pid, Message) ->
 	call(Pid, Message, 5000).
 call({async, Pid}, Message, _Timeout) ->
@@ -221,9 +226,13 @@ resultprocessing(Res, ProcessState, State) ->
 		{reply, Result, Object} ->
 			postprocessing(Result, ProcessState, State#{object => Object});
 		{await, Ref, Callback} ->
-			suspendprocess(Ref, Callback, ProcessState, State);
+			suspendprocess(await, Ref, Callback, ProcessState, State);
 		{await, Ref, Callback, Object} ->
-			suspendprocess(Ref, Callback, ProcessState, State#{object => Object});
+			suspendprocess(await, Ref, Callback, ProcessState, State#{object => Object});
+		{async, MFA, Callback} ->
+			suspendprocess(async, MFA, Callback, ProcessState, State);
+		{async, MFA, Callback, Object} ->
+			suspendprocess(async, MFA, Callback, ProcessState, State#{object => Object});
 		{next, MFA} ->
 			recurprocess(next, MFA, ProcessState, State);
 		{next, MFA, Object} ->
@@ -287,7 +296,13 @@ reply(ReplyTo, Ref, Result, State) ->
 	ReplyTo ! {Ref, Result},
 	loop(State).
 
-suspendprocess(Ref, Callback, ProcessState, #{stack := Stack} = State) ->
+suspendprocess(await, Ref, Callback, ProcessState, #{stack := Stack} = State) ->
+	loop(State#{stack => maps:put(Ref, #{callback => Callback, state => ProcessState}, Stack)});
+
+suspendprocess(async, {Module, Function, Arguments}, Callback, ProcessState, #{stack := Stack} = State) ->
+	Ref = erlang:make_ref(),
+	Self = self(),
+	spawn(fun() -> case catch erlang:apply(Module, Function, Arguments) of Result -> Self ! {Ref, Result} end end),
 	loop(State#{stack => maps:put(Ref, #{callback => Callback, state => ProcessState}, Stack)}).
 
 resumeprocess(Ref, Result, #{stack := Stack} = State) ->
@@ -424,7 +439,7 @@ gen_object_test_() ->
 		[
 			{"gen_object: create",
 				fun() ->
-					?assertMatch(Obj when is_pid(Obj), gen_object:new(testobj, #{})),
+					?assertMatch(Obj when is_pid(Obj), gen_object:new(testobj)),
 					?assertMatch({ok, Obj} when is_pid(Obj), gen_object:start_link(testobj, #{}))
 				end
 			},
@@ -460,7 +475,7 @@ gen_object_test_() ->
 			},
 			{"gen_object: phash2",
 				fun() ->
-					Obj = gen_object:new(testobj, #{}),
+					Obj = gen_object:new(testobj),
 					Method = {sum, 1, 2},
 					Hash = erlang:phash2(Method),
 					?assertMatch(3, begin Res = gen_object:mcall(Obj, [{sum, 1, 2}, a]), maps:get(Hash, Res) end)
@@ -469,11 +484,18 @@ gen_object_test_() ->
 			{"gen_object: await",
 				fun() ->
 					Obj1 = gen_object:new(testobj, #{key1 => 2}),
-					Obj2 = gen_object:new(testobj2, noparams),
+					Obj2 = gen_object:new(testobj2),
 					gen_object:call(Obj2, {key2, 3}),
 					?assertMatch(ok, testobj:start(Obj1, Obj2)),
 					?assertMatch(32, gen_object:call(Obj1, res)),
 					?assertMatch(8, gen_object:call(Obj2, res))
+				end
+			},
+			{"gen_object: async",
+				fun() ->
+					Obj = gen_object:new(test_async),
+					Res = test_async:test(async),
+					?assertMatch(Res, gen_object:call(Obj, async))
 				end
 			},
 			{"gen_object: call",
@@ -496,7 +518,7 @@ gen_object_test_() ->
 			},
 			{"gen_object: func",
 				fun() ->
-					Obj = gen_object:new(testobj4, 1),
+					Obj = gen_object:new(testobj4, #{param => 1}),
 					?assertMatch([{res1, 2}, {res2, 3}], gen_object:call(Obj, {func, fun(I) -> I + 1 end}))
 				end
 			},
@@ -505,7 +527,7 @@ gen_object_test_() ->
 					Factory_1 = concrete_factory_1:create(),
 					?assertMatch(Pid when is_pid(Pid), Factory_1),
 					
-					Product_A1 = abstract_factory:create_product_A(Factory_1, null),
+					Product_A1 = abstract_factory:create_product_A(Factory_1, #{}),
 					?assertMatch(Pid when is_pid(Pid), Product_A1),
 					ValueA1_1 = abstract_product_A:increment(Product_A1),
 					?assertMatch(2, ValueA1_1),
@@ -520,7 +542,7 @@ gen_object_test_() ->
 					Factory_2 = concrete_factory_2:create(),
 					?assertMatch(true, is_pid(Factory_2)),
 					
-					Product_A2 = abstract_factory:create_product_A(Factory_2, null),
+					Product_A2 = abstract_factory:create_product_A(Factory_2, #{}),
 					?assertMatch(true, is_pid(Product_A2)),
 					ValueA2_1 = abstract_product_A:increment(Product_A2),
 					?assertMatch(1, ValueA2_1),

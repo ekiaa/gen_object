@@ -9,7 +9,7 @@
 inherit(Params) ->
 	{gen_object, Params}.
 
-init(Param, Object) ->
+init(#{param := Param}, Object) ->
 	{ok, Object#{param => Param}}.
 
 handle_call({func, Func}, Object) when is_function(Func) ->

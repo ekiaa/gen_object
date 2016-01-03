@@ -7,7 +7,7 @@
 -export([create/0]).
 
 create() ->
-	gen_object:new(?MODULE, null).
+	gen_object:new(?MODULE).
 
 inherit(Params) ->
 	{abstract_factory, Params}.
