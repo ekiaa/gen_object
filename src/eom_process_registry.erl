@@ -6,7 +6,7 @@
 -export([inherit/1, init/2, handle_call/2, handle_info/2, terminate/2]).
 
 % Public
--export([start/1, stop/1, register/3, unregister/2, lookup/2]).
+-export([start/1, stop/1, register/3, reserve/2, unregister/2, lookup/2]).
 
 % Private
 -export([]).
@@ -24,7 +24,10 @@ stop(Registry) ->
 	gen_object:delete(Registry).
 
 register(Registry, Name, Process) when is_pid(Process) ->
-	gen_object:call(Registry, {register, Name, Process}).
+	gen_object:call(Registry, {register, Name, Process, self()}).
+
+reserve(Registry, Name) ->
+	gen_object:call(Registry, {reserve, Name, self()}).
 
 unregister(Registry, NameOrProcess) ->
 	gen_object:call(Registry, {unregister, NameOrProcess}).
@@ -59,20 +62,26 @@ init(#{registry := Registry}, Object) when is_atom(Registry) ->
 
 %-------------------------------------------------------------------------------
 
-handle_call({register, Name, Process}, #{registry := Registry}) when is_pid(Process)  ->
-	case ets:insert_new(Registry, {Name, Process}) of
-		true ->
-			case lookup_process(Registry, Process) of
-				{ok, NameList, Ref} ->
-					ets:insert(Registry, {Process, [Name | NameList], Ref}),
-					{reply, ok};
-				{error, _Reason} ->
-					Ref = erlang:monitor(process, Process),
-					ets:insert(Registry, {Process, [Name], Ref}),
-					{reply, ok}
-			end;
-		false ->
-			{reply, {error, already_exists}}
+handle_call({register, Name, Process, Client}, #{registry := Registry}) when is_pid(Process)  ->
+	case lookup_name(Registry, {'$reserve', Name}) of
+		{ok, Client} ->
+			delete_name(Registry, {'$reserve', Name}),
+			Result = insert_name(Registry, Name, Process),
+			{reply, Result};
+		{ok, _} ->
+			{reply, {error, already_exists}};
+		{error, not_found_name} ->
+			Result = insert_name(Registry, Name, Process),
+			{reply, Result}
+	end;
+
+handle_call({reserve, Name, Client}, #{registry := Registry}) ->
+	case lookup_name(Registry, Name) of
+		{ok, _} ->
+			{reply, {error, already_exists}};
+		{error, not_found_name} ->
+			Result = insert_name(Registry, {'$reserve', Name}, Client),
+			{reply, Result}
 	end;
 
 handle_call({unregister, Process}, #{registry := Registry}) when is_pid(Process) ->
@@ -80,13 +89,8 @@ handle_call({unregister, Process}, #{registry := Registry}) when is_pid(Process)
 	{reply, Result};
 
 handle_call({unregister, Name}, #{registry := Registry}) ->
-	case lookup_name(Registry, Name) of
-		{ok, Process} ->
-			Result = delete(Registry, Process),
-			{reply, Result};
-		Result ->
-			{reply, Result}
-	end;
+	Result = delete_name(Registry, Name),
+	{reply, Result};
 
 handle_call(_Msg, _Object) ->
 	appeal.
@@ -107,6 +111,25 @@ terminate(_Reason, #{registry := Registry}) ->
 	ok.
 
 %===============================================================================
+
+insert_name(Registry, Name, Process) ->
+	case ets:insert_new(Registry, {Name, Process}) of
+		true ->
+			add_name_for_process(Registry, Name, Process);
+		false ->
+			{error, already_exists}
+	end.
+
+add_name_for_process(Registry, Name, Process) ->
+	case lookup_process(Registry, Process) of
+		{ok, NameList, Ref} ->
+			ets:insert(Registry, {Process, [Name | NameList], Ref}),
+			ok;
+		{error, _Reason} ->
+			Ref = erlang:monitor(process, Process),
+			ets:insert(Registry, {Process, [Name], Ref}),
+			ok
+	end.
 
 lookup_name(Registry, Name) ->
 	case ets:lookup(Registry, Name) of
@@ -135,6 +158,30 @@ delete(Registry, Process) ->
 			ok
 	end.
 
+delete_name(Registry, Name) ->
+	case lookup_name(Registry, Name) of
+		{ok, Process} ->
+			ets:delete(Registry, Name),
+			delete_name_for_process(Registry, Name, Process);
+		Result ->
+			Result
+	end.
+
+delete_name_for_process(Registry, Name, Process) ->
+	case lookup_process(Registry, Process) of
+		{ok, NameList, Ref} ->
+			case [N || N <- NameList, N /= Name] of
+				[] ->
+					ets:delete(Registry, Process),
+					ok;
+				List ->
+					ets:insert(Registry, {Process, List, Ref}),
+					ok
+			end;
+		Result ->
+			Result
+	end.
+
 %===============================================================================
 
 -ifdef(TEST).
@@ -161,6 +208,18 @@ gen_object_test_() ->
 					?assertMatch(ok, eom_process_registry:register(Registry, test_1, Process)),
 					?assertMatch(ok, eom_process_registry:register(Registry, test_2, Process)),
 					?assertMatch({error, already_exists}, eom_process_registry:register(Registry, test_1, Process)),
+					eom_process_registry:stop(Registry)
+				end
+			},
+			{"eom_process_registry: reserve",
+				fun() ->
+					Process = self(),
+					{ok, _} = eom_process_registry:start(Registry),
+					?assertMatch(ok, eom_process_registry:reserve(Registry, test)),
+					?assertMatch({error, not_found_name}, eom_process_registry:lookup(Registry, test)),
+					?assertMatch({ok, Process}, eom_process_registry:lookup(Registry, {'$reserve', test})),
+					?assertMatch(ok, eom_process_registry:register(Registry, test, Process)),
+					?assertMatch({ok, Process}, eom_process_registry:lookup(Registry, test)),
 					eom_process_registry:stop(Registry)
 				end
 			},
