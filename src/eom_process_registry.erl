@@ -172,6 +172,7 @@ delete_name_for_process(Registry, Name, Process) ->
 		{ok, NameList, Ref} ->
 			case [N || N <- NameList, N /= Name] of
 				[] ->
+					erlang:demonitor(Ref),
 					ets:delete(Registry, Process),
 					ok;
 				List ->
