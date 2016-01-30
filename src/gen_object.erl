@@ -29,7 +29,7 @@ new(Class, Params) when is_map(Params) ->
 	end.
 
 start_link(Class, Params) ->
-	proc_lib:start_link(?MODULE, init, [Params, #{parent => self(), class => Class}]).
+	proc_lib:start_link(?MODULE, start, [Params, Class, self()]).
 
 call(Pid, Message) when Pid == self() ->
 	Message;
@@ -65,6 +65,58 @@ send(Type, Pid, Message) when is_pid(Pid); is_atom(Pid) ->
 delete(Pid) when is_pid(Pid); is_atom(Pid) ->
 	Pid ! {delete, self()},
 	ok.
+
+%===============================================================================
+
+start(Params, Class, Parent) ->
+	preprocessing(
+		get_process_state(
+			#{
+				type => init,
+				class => ?MODULE,
+				ref => erlang:make_ref(),
+				params => Params
+			}
+		),
+		#{
+			deb => sys:debug_options([]),
+			parent => Parent,
+			stack => #{},
+			object => #{class => Class}
+		}
+	).
+
+%===============================================================================
+
+init(Params, #{class := Successor} = Object) ->
+	{inherit, 
+		{Successor, Params}, 
+		{?MODULE, do_init, {inherit_result, Successor}}, 
+		Object#{
+			ancestors => #{},
+			successors => #{}
+		}
+	}.
+
+do_init({{inherit_result, Successor}, {?MODULE, Params}}, #{ancestors := Ancestors, successors := Successors} = Object) ->
+	{ok, 
+		Object#{
+			ancestors => maps:put(Successor, ?MODULE, Ancestors),
+			successors => maps:put(?MODULE, Successor, Successors)
+		}
+	};
+
+do_init({{inherit_result, Successor}, {Ancestor, Params}}, #{ancestors := Ancestors, successors := Successors} = Object) ->
+	{inherit, 
+		{Ancestor, Params}, 
+		{?MODULE, do_init, {inherit_result, Ancestor}}, 
+		Object#{
+			ancestors => maps:put(Successor, Ancestor, Ancestors),
+			successors => maps:put(Ancestor, Successor, Successors)
+		}
+	}.
+
+%===============================================================================
 
 init(Params, State) ->
 	init_relationship(Params, State#{
@@ -185,12 +237,21 @@ loop(State) ->
 			proc_lib:hibernate(?MODULE, loop, [State])
 	end.
 
+%===============================================================================
+
 preprocessing(#{type := mcall, message_list := []} = ProcessState, State) ->
 	endprocess(ProcessState, State);
 preprocessing(#{type := mcall, message_list := [Message | MessageList]} = ProcessState, State) ->
 	processing(ProcessState#{message => Message, message_list => MessageList}, State);
 preprocessing(ProcessState, State) ->
 	processing(ProcessState, State).
+
+%===============================================================================
+
+processing(#{type := init, class := Class, params := Params} = ProcessState, #{object := Object} = State) ->
+	case catch Class:init(Params, Object) of
+		Res -> resultprocessing(Res, ProcessState, State)
+	end;
 
 processing(#{type := info, message := Message, class := Class} = ProcessState, #{object := Object} = State) ->
 	case catch Class:handle_info(Message, Object) of
@@ -208,6 +269,8 @@ processing(#{type := Type, mfa := {Module, Function, Argument}} = ProcessState, 
 	case catch Module:Function(Argument, Object) of
 		Res -> resultprocessing(Res, ProcessState, State)
 	end.
+
+%===============================================================================
 
 resultprocessing(Res, ProcessState, State) ->
 	case Res of
