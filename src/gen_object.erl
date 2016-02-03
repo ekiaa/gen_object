@@ -1,6 +1,6 @@
 -module(gen_object).
 
--export([new/1, new/2, start_link/2, call/2, call/3, mcall/2, mcall/3, delete/1, init/2, loop/1]).
+-export([new/1, new/2, start_link/2, start/3, call/2, call/3, mcall/2, mcall/3, delete/1, init/2, loop/1]).
 
 -export([handle_call/2, handle_info/2]).
 
@@ -18,6 +18,8 @@ behaviour_info(callbacks) ->
 		{handle_info, 2},
 		{terminate, 2}
 	].
+
+%===============================================================================
 
 new(Class) ->
 	new(Class, #{}).
@@ -69,64 +71,18 @@ delete(Pid) when is_pid(Pid); is_atom(Pid) ->
 %===============================================================================
 
 start(Params, Class, Parent) ->
-	preprocessing(
-		get_process_state(
-			#{
-				type => init,
-				class => ?MODULE,
-				ref => erlang:make_ref(),
-				params => Params
-			}
-		),
+	init_relationship(
+		Class,
+		Params,
 		#{
-			deb => sys:debug_options([]),
+			class => Class,
 			parent => Parent,
+			ancestors => #{}, 
+			successors => #{},
 			stack => #{},
-			object => #{class => Class}
+			object => #{}
 		}
 	).
-
-%===============================================================================
-
-init(Params, #{class := Successor} = Object) ->
-	{inherit, 
-		{Successor, Params}, 
-		{?MODULE, do_init, {inherit_result, Successor}}, 
-		Object#{
-			ancestors => #{},
-			successors => #{}
-		}
-	}.
-
-do_init({{inherit_result, Successor}, {?MODULE, Params}}, #{ancestors := Ancestors, successors := Successors} = Object) ->
-	{ok, 
-		Object#{
-			ancestors => maps:put(Successor, ?MODULE, Ancestors),
-			successors => maps:put(?MODULE, Successor, Successors)
-		}
-	};
-
-do_init({{inherit_result, Successor}, {Ancestor, Params}}, #{ancestors := Ancestors, successors := Successors} = Object) ->
-	{inherit, 
-		{Ancestor, Params}, 
-		{?MODULE, do_init, {inherit_result, Ancestor}}, 
-		Object#{
-			ancestors => maps:put(Successor, Ancestor, Ancestors),
-			successors => maps:put(Ancestor, Successor, Successors)
-		}
-	}.
-
-%===============================================================================
-
-init(Params, State) ->
-	init_relationship(Params, State#{
-		deb => sys:debug_options([]), 
-		ancestors => #{}, 
-		successors => #{},
-		stack => #{}}).
-
-init_relationship(Params, #{class := Class} = State) ->
-	init_relationship(Class, Params, State).
 
 init_relationship(Successor, Params, State) ->
 	case catch Successor:inherit(Params) of
@@ -139,60 +95,31 @@ inherit_result(Result, Successor, #{ancestors := Ancestors, successors := Succes
 		{'EXIT', Reason} ->
 			exit({error, ?LINE, Reason});
 		{?MODULE, Params} ->
-			init_object(Params, State#{
-				ancestors => maps:put(Successor, ?MODULE, Ancestors),
-				successors => maps:put(?MODULE, Successor, Successors)});
-		{Ancestor, Params} when is_atom(Ancestor) ->
-			init_relationship(Ancestor, Params, State#{
-				ancestors => maps:put(Successor, Ancestor, Ancestors),
-				successors => maps:put(Ancestor, Successor, Successors)})
-	end.
-
-init_object(Params, #{successors := Successors} = State) ->
-	Successor = maps:get(?MODULE, Successors),
-	init_object(Successor, Params, State#{object => #{}}).
-
-init_object(Ancestor, Params, #{object := AncestorObject} = State) ->
-	case catch Ancestor:init(Params, AncestorObject) of
-		{'EXIT', Reason} ->
-			exit({error, ?LINE, Reason});
-		Result ->
-			init_object_result(Result, Ancestor, Params, State)
-	end.
-
-init_object_result(Result, Ancestor, _Params, #{parent := Parent, class := Class, stack := Stack} = State) when Ancestor == Class ->
-	case Result of
-		{ok, SuccessorObject} ->
-			proc_lib:init_ack(Parent, {ok, self()}),
-			loop(State#{object => SuccessorObject});
-		{next, MFA, SuccessorObject} -> 
-			proc_lib:init_ack(Parent, {ok, self()}),
-			Ref = erlang:make_ref(),
 			preprocessing(
-				get_process_state(#{ 
-					class => Class, 
-					type => next, 
-					mfa => MFA,
-					from => self, 
-					ref => Ref}),
-				State#{stack => maps:put(Ref, #{state => #{type => loop}}, Stack)});
-		{error, Reason} ->
-			proc_lib:init_ack(Parent, {error, Reason}),
-			exit({error, Reason});
-		_ ->
-			Reason = {bad_return, ?LINE, Result},
-			proc_lib:init_ack(Parent, {error, Reason}),
-			exit(Reason)
-	end;
+				get_process_state(
+					#{
+						type => init,
+						class => ?MODULE,
+						params => Params
+					}
+				),
+				State#{
+					ancestors => maps:put(Successor, ?MODULE, Ancestors),
+					successors => maps:put(?MODULE, Successor, Successors)
+				}
+			);
+		{Ancestor, Params} when is_atom(Ancestor) ->
+			init_relationship(
+				Ancestor,
+				Params,
+				State#{
+					ancestors => maps:put(Successor, Ancestor, Ancestors),
+					successors => maps:put(Ancestor, Successor, Successors)
+				}
+			)
+	end.
 
-init_object_result(Result, Ancestor, Params, #{successors := Successors} = State) ->
-	SuccessorObject = case Result of
-		{ok, Object} -> Object;
-		{next, _, Object} -> Object;
-		_ -> exit({bad_return, ?LINE, Result})
-	end,
-	Successor = maps:get(Ancestor, Successors),
-	init_object(Successor, Params, State#{object => SuccessorObject}).
+%-------------------------------------------------------------------------------
 
 loop(State) ->
 	receive
@@ -281,6 +208,12 @@ resultprocessing(Res, #{type := Type} = ProcessState, State) ->
 	case Res of
 		{'EXIT', {function_clause, _}} ->
 			processing_appeal(ProcessState, State);
+		ok when Type == init ->
+			processing_init(ok, ProcessState, State);
+		{ok, Object} when Type == init ->
+			processing_init(ok, ProcessState, State#{object => Object});
+		{error, Reason} when Type == init ->
+			processing_init({error, Reason}, ProcessState, State);
 		appeal -> 
 			processing_appeal(ProcessState, State);
 		{appeal, Object} -> 
@@ -317,11 +250,12 @@ resultprocessing(Res, #{type := Type} = ProcessState, State) ->
 			recurprocess(mcall, MessageList, Callback, ProcessState, State);
 		{mcall, MessageList, Callback, Object} ->
 			recurprocess(mcall, MessageList, Callback, ProcessState, State#{object => Object});
-		{inherit, Params, Callback, Object} when Type == init ->
-			recurprocess(inherit, Params, Callback, ProcessState, State#{object => Object});
 		_ ->
+			error_logger:error_report([{bad_return, ?LINE, Res}, erlang:get_stacktrace()]),
 			exit({bad_return, ?LINE, Res})
 	end.
+
+%===============================================================================
 
 processing_appeal(#{class := Class} = ProcessState, #{ancestors := Ancestors} = State) ->
 	Ancestor = maps:get(Class, Ancestors),
@@ -343,6 +277,22 @@ postprocessing(Result, #{type := next, from := self, ref := Ref}, #{stack := Sta
 	postprocessing(Result, ProcessState, State#{stack => maps:remove(Ref, Stack)});
 postprocessing(Result, ProcessState, State) ->
 	endprocess(ProcessState#{result => Result}, State).
+
+%-------------------------------------------------------------------------------
+
+processing_init(ok, #{type := init, class := Class} = ProcessState, #{successors := Successors, parent := Parent} = State) ->
+	case maps:get(Class, Successors, undefined) of
+		undefined ->
+			proc_lib:init_ack(Parent, {ok, self()}),
+			loop(State);
+		Successor ->
+			preprocessing(ProcessState#{class => Successor}, State)
+	end;
+processing_init({error, Reason}, #{type := init}, #{parent := Parent} = State) ->
+	proc_lib:init_ack(Parent, {error, Reason}),
+	exit({error, Reason}).
+
+%-------------------------------------------------------------------------------
 
 endprocess(#{type := info}, State) ->
 	loop(State);
@@ -416,17 +366,6 @@ recurprocess(next, MFA, #{class := Class, ref := Ref} = ProcessState, #{stack :=
 			ref => erlang:make_ref()}),
 		State#{stack => maps:put(Ref, #{state => ProcessState}, Stack)}).
 
-recurprocess(inherit, {Class, Params}, Callback, ProcessState, State) ->
-	Ref = erlang:make_ref(),
-	preprocessing(
-		get_process_state(#{ 
-			class => Class, 
-			type => inherit, 
-			mfa => MFA,
-			from => self, 
-			ref => Ref}),
-		State#{stack => maps:put(Ref, #{callback => Callback, state => ProcessState}, Stack)});
-
 recurprocess(func, MFA, Callback, #{class := Class} = ProcessState, #{stack := Stack} = State) ->
 	Ref = erlang:make_ref(),
 	preprocessing(
@@ -461,12 +400,6 @@ recurprocess(mcall, MessageList, Callback, #{class := Class} = ProcessState, #{s
 			ref => Ref}),
 		State#{stack => maps:put(Ref, #{callback => Callback, state => ProcessState}, Stack)}).
 
-handle_call(_Message, _Object) ->
-	{reply, undefined}.
-
-handle_info(_Message, _Object) ->
-	noreply.
-
 system_continue(_Parent, _Deb, State) ->
 	loop(State).
 
@@ -480,6 +413,30 @@ system_get_state(State) ->
 system_replace_state(StateFun, State) ->
 	NewState = StateFun(State),
 	{ok, NewState, NewState}.
+
+get_process_state(State) ->
+	DefaultState = #{
+		message => undefined,
+		message_list => undefined,
+		result => undefined,
+		type => undefined,
+		from => undefined,
+		params => undefined,
+		class => undefined,
+		ref => erlang:make_ref()
+	},
+	maps:merge(DefaultState, State).
+
+%===============================================================================
+
+init(Params, Object) ->
+	ok.
+
+handle_call(_Message, _Object) ->
+	{reply, undefined}.
+
+handle_info(_Message, _Object) ->
+	noreply.
 
 terminate(Reason, #{class := Class, object := Object}) ->
 	case catch Class:terminate(Reason, Object) of
@@ -497,16 +454,6 @@ terminate(Reason, #{class := Class, object := Object}) ->
 					erlang:exit(Reason)
 			end
 	end.
-
-get_process_state(State) ->
-	DefaultState = #{
-		message => undefined,
-		message_list => undefined,
-		result => undefined,
-		type => undefined,
-		from => undefined,
-		ref => undefined},
-	maps:merge(DefaultState, State).
 
 %===============================================================================
 

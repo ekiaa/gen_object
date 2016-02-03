@@ -51,10 +51,10 @@ do_init({start_child, []}, Object) ->
 do_init({start_child, [{ID, Class, Params, Restart, Shutdown} | Rest]}, #{childs := Childs, pids := Pids} = Object) ->
 	case gen_object:start_link(Class, Params) of
 		{ok, Pid} ->
-			do_init(Rest, Object#{
+			do_init({start_child, Rest}, Object#{
 				childs => maps:put(ID, {Class, Params, Restart, Shutdown}, Childs),
 				pids => maps:put(Pid, ID, Pids)
-			)});
+			});
 		{error, Reason} ->
 			{error, Reason};
 		Result ->
