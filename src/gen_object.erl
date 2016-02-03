@@ -253,6 +253,11 @@ processing(#{type := init, class := Class, params := Params} = ProcessState, #{o
 		Res -> resultprocessing(Res, ProcessState, State)
 	end;
 
+processing(#{type := inherit, class := Class, params := Params} = ProcessState, State) ->
+	case catch Class:inherit(Params) of
+		Res -> resultprocessing(Res, ProcessState, State)
+	end;
+
 processing(#{type := info, message := Message, class := Class} = ProcessState, #{object := Object} = State) ->
 	case catch Class:handle_info(Message, Object) of
 		Res -> resultprocessing(Res, ProcessState, State)
@@ -272,7 +277,7 @@ processing(#{type := Type, mfa := {Module, Function, Argument}} = ProcessState, 
 
 %===============================================================================
 
-resultprocessing(Res, ProcessState, State) ->
+resultprocessing(Res, #{type := Type} = ProcessState, State) ->
 	case Res of
 		{'EXIT', {function_clause, _}} ->
 			processing_appeal(ProcessState, State);
@@ -312,6 +317,8 @@ resultprocessing(Res, ProcessState, State) ->
 			recurprocess(mcall, MessageList, Callback, ProcessState, State);
 		{mcall, MessageList, Callback, Object} ->
 			recurprocess(mcall, MessageList, Callback, ProcessState, State#{object => Object});
+		{inherit, Params, Callback, Object} when Type == init ->
+			recurprocess(inherit, Params, Callback, ProcessState, State#{object => Object});
 		_ ->
 			exit({bad_return, ?LINE, Res})
 	end.
@@ -399,16 +406,26 @@ resumeprocess(Ref, Result, #{stack := Stack} = State) ->
 recurprocess(next, MFA, #{type := next} = ProcessState, State) ->
 	preprocessing(ProcessState#{mfa => MFA}, State);
 
-recurprocess(next, MFA, #{class := Class} = ProcessState, #{stack := Stack} = State) ->
-	Ref = erlang:make_ref(),
+recurprocess(next, MFA, #{class := Class, ref := Ref} = ProcessState, #{stack := Stack} = State) ->
 	preprocessing(
 		get_process_state(#{ 
 			class => Class, 
 			type => next, 
 			mfa => MFA,
 			from => self, 
-			ref => Ref}),
+			ref => erlang:make_ref()}),
 		State#{stack => maps:put(Ref, #{state => ProcessState}, Stack)}).
+
+recurprocess(inherit, {Class, Params}, Callback, ProcessState, State) ->
+	Ref = erlang:make_ref(),
+	preprocessing(
+		get_process_state(#{ 
+			class => Class, 
+			type => inherit, 
+			mfa => MFA,
+			from => self, 
+			ref => Ref}),
+		State#{stack => maps:put(Ref, #{callback => Callback, state => ProcessState}, Stack)});
 
 recurprocess(func, MFA, Callback, #{class := Class} = ProcessState, #{stack := Stack} = State) ->
 	Ref = erlang:make_ref(),
